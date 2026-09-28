@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -54,19 +55,39 @@ class OportunidadeRepository:
             return stmt
         return stmt.where(Oportunidade.usuario_id == self.usuario.id)
 
-    async def list_oportunidades(self, limit: int = 500) -> list[Oportunidade]:
-        stmt = self._scoped_filter(
-            select(Oportunidade)
-            .options(selectinload(Oportunidade.lead))
-            .order_by(Oportunidade.updated_at.desc())
-            .limit(limit)
-        )
+    async def list_oportunidades(
+        self,
+        limit: int = 500,
+        *,
+        usuario_id: UUID | None = None,
+        inicio: datetime | None = None,
+        fim: datetime | None = None,
+    ) -> list[Oportunidade]:
+        """Lista oportunidades respeitando RF07, com filtros opcionais de vendedor e período.
+
+        O período considera a data em que a oportunidade entrou no CRM Assist (created_at),
+        com `inicio` inclusivo e `fim` exclusivo.
+        """
+        stmt = select(Oportunidade).options(selectinload(Oportunidade.lead))
+        if usuario_id:
+            stmt = stmt.where(Oportunidade.usuario_id == usuario_id)
+        if inicio:
+            stmt = stmt.where(Oportunidade.created_at >= inicio)
+        if fim:
+            stmt = stmt.where(Oportunidade.created_at < fim)
+        stmt = self._scoped_filter(stmt.order_by(Oportunidade.updated_at.desc()).limit(limit))
         r = await self.session.execute(stmt)
         return list(r.scalars().all())
 
-    async def kanban_por_etapa(self) -> dict[str, list[dict]]:
+    async def kanban_por_etapa(
+        self,
+        *,
+        usuario_id: UUID | None = None,
+        inicio: datetime | None = None,
+        fim: datetime | None = None,
+    ) -> dict[str, list[dict]]:
         """Agrupa oportunidades por etapa_funil para UI kanban (RF04)."""
-        oportunidades = await self.list_oportunidades()
+        oportunidades = await self.list_oportunidades(usuario_id=usuario_id, inicio=inicio, fim=fim)
         buckets: dict[str, list[dict]] = {}
         for op in oportunidades:
             etapa = op.etapa_funil or "Sem etapa"

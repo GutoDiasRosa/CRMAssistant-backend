@@ -14,6 +14,7 @@ O backend se integra ao **RD Station CRM**, mantém uma cópia local dos leads e
 - [Modelo de dados](#modelo-de-dados)
 - [Stack](#stack)
 - [Como rodar](#como-rodar)
+- [Deploy (Render + Neon)](#deploy-render--neon-plano-gratuito)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Endpoints](#endpoints)
 - [Perfis e permissões](#perfis-e-permissões)
@@ -122,6 +123,7 @@ A migração inicial está em `alembic/versions/001_initial_schema.py`.
 | `relatorio` | Relatórios gerados (parâmetros e resultado em JSON) |
 | `sincronizacao` | Log de cada evento recebido do RD Station |
 | `rd_station_token` | Tokens OAuth do RD Station |
+| `rd_station_config` | Client ID e Client Secret cadastrados pela tela de integração |
 
 ```
 usuario 1───* leads 1───* oportunidade 1───* interacao
@@ -210,21 +212,50 @@ As migrações (`alembic upgrade head`) rodam automaticamente na inicialização
 
 ---
 
+## Deploy (Render + Neon, plano gratuito)
+
+O arquivo [`render.yaml`](../render.yaml) é um *Blueprint* do Render que cria os dois serviços a partir dos dois repositórios. O banco fica no Neon, porque o Postgres grátis do Render expira em 30 dias.
+
+| Parte | Onde | Endereço | Custo |
+|---|---|---|---|
+| Front-end (site estático) | Render, repositório `CRMAssistant` | `https://crmassistant.onrender.com` | grátis |
+| API (Dockerfile) | Render, pasta `backend/` deste repositório | `https://crmassistant-api.onrender.com` | grátis (750 h/mês) |
+| PostgreSQL | Neon, região AWS us-east-1 | interno | grátis (0,5 GB) |
+
+Cada `git push` na `main` gera um novo deploy do serviço correspondente. As migrações rodam sozinhas quando a API sobe.
+
+1. No [Neon](https://neon.com), crie um projeto na região **AWS US East (N. Virginia)** e copie a *connection string* **direta** (sem `-pooler` no host).
+2. No [Render](https://render.com), conecte o GitHub com acesso aos dois repositórios e crie um *Blueprint* a partir deste repositório. Na criação, informe `POSTGRES_URL` (a string do Neon); `RD_WEBHOOK_SECRET` e `ANTHROPIC_API_KEY` podem ficar vazios por enquanto.
+3. Confira as URLs geradas. Se o Render acrescentou um sufixo aos nomes, ajuste `FRONTEND_URL`/`CORS_ORIGINS` na API e `VITE_API_URL` no front.
+4. Crie o primeiro administrador a partir da sua máquina, apontando para o banco do Neon (o plano grátis do Render não tem console):
+   ```powershell
+   $env:POSTGRES_URL = "<connection string do Neon>"
+   python -m scripts.criar_admin voce@empresa.com "Seu Nome"
+   ```
+5. No plano grátis a API hiberna após 15 minutos sem acesso e leva cerca de 1 minuto para voltar. Para receber webhooks sem atraso, agende no [cron-job.org](https://cron-job.org) (grátis) um `GET https://crmassistant-api.onrender.com/health` a cada 10 minutos.
+6. Entre no sistema e abra **Integração RD**. As URLs de callback e de webhook exibidas ali já são as públicas; cadastre-as no aplicativo do RD Station.
+
+> Não rode o `seed_dev` em produção: as senhas de demonstração estão publicadas neste README.
+
+---
+
 ## Variáveis de ambiente
 
 | Variável | Obrigatória | Padrão | Descrição |
 |---|---|---|---|
-| `POSTGRES_URL` | Sim | `postgresql+asyncpg://crm:crm@localhost:5432/crmassistant` | Conexão com o banco |
+| `POSTGRES_URL` | Sim | `postgresql+asyncpg://crm:crm@localhost:5432/crmassistant` | Conexão com o banco. Aceita também a URL crua dos provedores, como a do Neon (`postgresql://...?sslmode=require&channel_binding=require`) |
 | `JWT_SECRET` | Sim | `change-me` | Chave de assinatura dos tokens. **Troque em produção** |
 | `CORS_ORIGINS` | Não | `*` | Origens permitidas, separadas por vírgula (ex.: `http://localhost:5173`) |
 | `ANTHROPIC_API_KEY` | Não | — | Chave da API do Claude. Sem ela, o chat usa respostas de *fallback* |
 | `ANTHROPIC_MODEL` | Não | `claude-opus-5` | Modelo usado pelo assistente |
 | `ANTHROPIC_EFFORT` | Não | `low` | Nível de esforço do modelo (`low`, `medium`, `high`...). `low` mantém o chat rápido |
-| `RD_CLIENT_ID` | Para o RF02 | — | Client ID do app no RD Station |
-| `RD_CLIENT_SECRET` | Para o RF02 | — | Client secret do app no RD Station |
-| `RD_REDIRECT_URI` | Para o RF02 | `http://localhost:8000/oauth/rd/callback` | URL de retorno do OAuth |
+| `RD_CLIENT_ID` | Não | — | Client ID do app no RD Station (reserva; o normal é cadastrar pela tela Integração RD) |
+| `RD_CLIENT_SECRET` | Não | — | Client secret do app no RD Station (reserva, idem) |
+| `RD_REDIRECT_URI` | Não | `API_PUBLIC_URL` + `/oauth/rd/callback` | URL de retorno do OAuth |
 | `RD_OAUTH_AUTHORIZE_URL` | Não | `https://api.rd.services/auth/dialog` | Endpoint de autorização do RD |
 | `RD_OAUTH_TOKEN_URL` | Não | `https://api.rd.services/auth/token` | Endpoint de token do RD |
+| `FRONTEND_URL` | Não | `http://localhost:5173` | Front-end para onde o callback OAuth devolve o usuário |
+| `API_PUBLIC_URL` | Não | `RENDER_EXTERNAL_URL` | Endereço público da API, usado nas URLs de webhook e callback. No Render é preenchido sozinho |
 | `RD_WEBHOOK_SECRET` | Recomendada | — | Segredo do webhook. **Se ficar vazia, o webhook aceita qualquer chamada (use só em desenvolvimento)** |
 | `SKIP_ALEMBIC_ON_STARTUP` | Não | — | `1` para não rodar as migrações ao iniciar (usado nos testes) |
 
@@ -246,8 +277,11 @@ Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. 
 | GET | `/api/crm/kanban` 🔒 | Oportunidades agrupadas por etapa do funil |
 | GET | `/api/crm/metricas` 🔒 | Totais e valor somado de leads e oportunidades |
 | GET | `/api/crm/sincronizacoes` 🔒 | Últimas sincronizações recebidas do RD Station |
-| GET | `/oauth/rd/authorize` | Redireciona para a autorização no RD Station |
-| GET | `/oauth/rd/callback` | Recebe o `code` do RD e armazena os tokens |
+| GET | `/oauth/rd/conexao` 🔒 admin | Status, credenciais (sem o secret), URLs de callback e webhook |
+| PUT | `/oauth/rd/credenciais` 🔒 admin | Salva Client ID e Client Secret do app RD Station |
+| POST | `/oauth/rd/authorize-url` 🔒 admin | Gera a URL de autorização do RD com `state` assinado |
+| GET | `/oauth/rd/callback` | Recebe o `code` do RD, armazena os tokens e volta para `FRONTEND_URL/integracao-rd` |
+| DELETE | `/oauth/rd/conexao` 🔒 admin | Desconecta o RD Station (apaga os tokens) |
 | GET | `/oauth/rd/status` 🔒 | Indica se o RD Station já está conectado |
 | POST | `/webhooks/rd-station` | Recebe eventos de leads e oportunidades do RD Station |
 

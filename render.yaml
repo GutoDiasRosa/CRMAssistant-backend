@@ -1,0 +1,54 @@
+# Blueprint do Render: cria a API e o front a partir dos dois repositórios.
+# Banco: PostgreSQL grátis no Neon (o Postgres grátis do Render expira em 30 dias).
+#
+#   https://crmassistant.onrender.com      -> front-end (repositório CRMAssistant)
+#   https://crmassistant-api.onrender.com  -> API (este repositório)
+#
+# Se o Render acrescentar um sufixo aos nomes (nome já usado por outra conta),
+# corrija FRONTEND_URL / CORS_ORIGINS na API e VITE_API_URL no front pelo painel.
+# Valores "sync: false" são pedidos na criação e nunca entram neste arquivo.
+
+services:
+  - type: web
+    name: crmassistant-api
+    runtime: docker
+    plan: free
+    region: virginia # mesma região do banco no Neon (AWS us-east-1)
+    repo: https://github.com/GutoDiasRosa/CRMAssistant-backend
+    branch: main
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: POSTGRES_URL
+        sync: false # connection string do Neon (a "direta", sem -pooler)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: RD_WEBHOOK_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://crmassistant.onrender.com
+      - key: CORS_ORIGINS
+        value: https://crmassistant.onrender.com
+      # API_PUBLIC_URL e RD_REDIRECT_URI saem de RENDER_EXTERNAL_URL, definida pelo Render.
+
+  - type: web
+    name: crmassistant
+    runtime: static
+    repo: https://github.com/GutoDiasRosa/CRMAssistant
+    branch: main
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    # Rotas do React Router (/dashboard, /integracao-rd...) caem no index.html
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://crmassistant-api.onrender.com
+      - key: NODE_VERSION
+        value: "22"

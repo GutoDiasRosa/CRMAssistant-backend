@@ -16,10 +16,7 @@ target_metadata = Base.metadata
 
 def get_sync_url() -> str:
     # Mesma URL da API: variável de ambiente POSTGRES_URL ou backend/.env.
-    url = get_settings().postgres_url
-    if "+asyncpg" in url:
-        return url.replace("postgresql+asyncpg", "postgresql+psycopg2", 1)
-    return url
+    return get_settings().database_url("psycopg2")
 
 
 def run_migrations_offline() -> None:
