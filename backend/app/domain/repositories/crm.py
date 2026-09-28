@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
@@ -19,6 +20,19 @@ class LeadRepository:
 
     async def list_leads(self, limit: int = 100) -> list[Lead]:
         stmt = self._scoped_filter(select(Lead).order_by(Lead.updated_at.desc()).limit(limit))
+        r = await self.session.execute(stmt)
+        return list(r.scalars().all())
+
+    async def buscar(self, termo: str, limit: int = 20) -> list[Lead]:
+        """Busca por nome ou e-mail (sem diferenciar maiúsculas), respeitando RF07."""
+        padrao = f"%{termo.strip()}%"
+        stmt = self._scoped_filter(
+            select(Lead)
+            .options(selectinload(Lead.usuario), selectinload(Lead.oportunidades))
+            .where((Lead.nome.ilike(padrao)) | (Lead.email.ilike(padrao)))
+            .order_by(Lead.updated_at.desc())
+            .limit(limit)
+        )
         r = await self.session.execute(stmt)
         return list(r.scalars().all())
 
@@ -42,7 +56,10 @@ class OportunidadeRepository:
 
     async def list_oportunidades(self, limit: int = 500) -> list[Oportunidade]:
         stmt = self._scoped_filter(
-            select(Oportunidade).order_by(Oportunidade.updated_at.desc()).limit(limit)
+            select(Oportunidade)
+            .options(selectinload(Oportunidade.lead))
+            .order_by(Oportunidade.updated_at.desc())
+            .limit(limit)
         )
         r = await self.session.execute(stmt)
         return list(r.scalars().all())
@@ -62,17 +79,67 @@ class OportunidadeRepository:
                     "status": op.status,
                     "usuario_id": str(op.usuario_id) if op.usuario_id else None,
                     "lead_id": str(op.lead_id) if op.lead_id else None,
+                    "lead_nome": op.lead.nome if op.lead else None,
                 }
             )
         return buckets
 
+    async def buscar(
+        self, termo: str | None = None, etapa: str | None = None, limit: int = 50
+    ) -> list[Oportunidade]:
+        """Filtra por nome da oportunidade/contato e/ou etapa, respeitando RF07."""
+        stmt = select(Oportunidade).options(
+            selectinload(Oportunidade.lead),
+            selectinload(Oportunidade.usuario),
+            selectinload(Oportunidade.interacoes),
+        )
+        if termo:
+            padrao = f"%{termo.strip()}%"
+            stmt = stmt.outerjoin(Lead, Oportunidade.lead_id == Lead.id).where(
+                (Oportunidade.nome.ilike(padrao)) | (Lead.nome.ilike(padrao))
+            )
+        if etapa:
+            stmt = stmt.where(Oportunidade.etapa_funil.ilike(f"%{etapa.strip()}%"))
+        stmt = self._scoped_filter(stmt.order_by(Oportunidade.valor.desc().nulls_last()).limit(limit))
+        r = await self.session.execute(stmt)
+        return list(r.scalars().unique().all())
+
+    async def performance_por_vendedor(self) -> list[dict]:
+        """Totais por responsável (RF06). Perfis sem visão total recebem só a própria linha."""
+        stmt = (
+            select(
+                Usuario.nome,
+                Usuario.perfil,
+                func.count(Oportunidade.id),
+                func.coalesce(func.sum(Oportunidade.valor), 0),
+            )
+            .join(Oportunidade, Oportunidade.usuario_id == Usuario.id)
+            .group_by(Usuario.id, Usuario.nome, Usuario.perfil)
+            .order_by(func.coalesce(func.sum(Oportunidade.valor), 0).desc())
+        )
+        stmt = self._scoped_filter(stmt)
+        rows = (await self.session.execute(stmt)).all()
+        return [
+            {
+                "vendedor": nome,
+                "perfil": perfil,
+                "oportunidades": int(qtd),
+                "valor_total": float(valor),
+            }
+            for nome, perfil, qtd, valor in rows
+        ]
+
     async def metricas_resumo(self) -> dict:
         """Contagens agregadas respeitando RF07."""
         base_leads = select(func.count()).select_from(Lead)
-        base_ops = select(func.count()).select_from(Oportunidade)
+        base_ops = select(func.count(), func.coalesce(func.sum(Oportunidade.valor), 0))
         if not pode_ver_todos_oportunidades(self.usuario):
             base_leads = base_leads.where(Lead.usuario_id == self.usuario.id)
             base_ops = base_ops.where(Oportunidade.usuario_id == self.usuario.id)
         n_leads = (await self.session.execute(base_leads)).scalar_one()
-        n_ops = (await self.session.execute(base_ops)).scalar_one()
-        return {"total_leads": int(n_leads), "total_oportunidades": int(n_ops)}
+        n_ops, valor_total = (await self.session.execute(base_ops)).one()
+        return {
+            "total_leads": int(n_leads),
+            "total_oportunidades": int(n_ops),
+            "valor_total_oportunidades": float(valor_total),
+        }

@@ -10,7 +10,7 @@ packages = [{ include = "app" }]
 python = "^3.11"
 fastapi = "^0.115.0"
 uvicorn = { extras = ["standard"], version = "^0.32.0" }
-pydantic = "^2.10.0"
+pydantic = { extras = ["email"], version = "^2.10.0" }
 pydantic-settings = "^2.6.0"
 sqlalchemy = { extras = ["asyncio"], version = "^2.0.36" }
 asyncpg = "^0.30.0"
@@ -20,8 +20,7 @@ httpx = "^0.28.0"
 python-jose = { extras = ["cryptography"], version = "^3.3.0" }
 passlib = { extras = ["bcrypt"], version = "^1.7.4" }
 bcrypt = "^4.2.0"
-langchain-core = "^0.3.28"
-langchain-anthropic = "^0.3.0"
+anthropic = "^1.8.0"
 pyyaml = "^6.0.2"
 
 [tool.poetry.group.dev.dependencies]

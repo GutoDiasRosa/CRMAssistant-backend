@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     rd_webhook_secret: str = ""
 
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-3-5-haiku-20241022"
+    anthropic_model: str = "claude-opus-5"
+    # Esforço do modelo: "low" mantém o chat rápido (RNF01, resposta em até 10 s).
+    # Suba para "medium"/"high" se precisar de análises mais elaboradas.
+    anthropic_effort: str = "low"
 
 
 @lru_cache

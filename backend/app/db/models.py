@@ -18,6 +18,7 @@ class PerfilUsuario(str, enum.Enum):
     GERENTE = "GERENTE"
     DIRETOR = "DIRETOR"
     ANALISTA = "ANALISTA"
+    ADMIN = "ADMIN"
 
 
 class Usuario(Base):

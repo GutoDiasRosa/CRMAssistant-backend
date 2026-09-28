@@ -1,20 +1,22 @@
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.config import get_settings
 from app.db.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Mantém os loggers da API ativos quando as migrações rodam no startup.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
 
 def get_sync_url() -> str:
-    url = os.environ.get("POSTGRES_URL", "postgresql+asyncpg://crm:crm@localhost:5432/crmassistant")
+    # Mesma URL da API: variável de ambiente POSTGRES_URL ou backend/.env.
+    url = get_settings().postgres_url
     if "+asyncpg" in url:
         return url.replace("postgresql+asyncpg", "postgresql+psycopg2", 1)
     return url

@@ -9,7 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.middleware.request_logging import RequestLoggingMiddleware
-from app.routes import auth, chat_crm, crm_dashboard, health, integracao_rd, webhooks_rd
+from app.routes import (
+    auth,
+    chat_crm,
+    crm_dashboard,
+    health,
+    integracao_rd,
+    usuarios,
+    webhooks_rd,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +61,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(usuarios.router)
     app.include_router(integracao_rd.router)
     app.include_router(webhooks_rd.router)
     app.include_router(chat_crm.router)

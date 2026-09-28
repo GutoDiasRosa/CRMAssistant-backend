@@ -33,4 +33,13 @@ async def get_current_user(
 
 
 def pode_ver_todos_oportunidades(usuario: Usuario) -> bool:
-    return usuario.perfil in ("GERENTE", "DIRETOR", "ANALISTA")
+    return usuario.perfil in ("GERENTE", "DIRETOR", "ANALISTA", "ADMIN")
+
+
+async def get_current_admin(
+    user: Annotated[Usuario, Depends(get_current_user)],
+) -> Usuario:
+    """Restringe a rota a administradores (gestão de usuários)."""
+    if user.perfil != "ADMIN":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso restrito a administradores")
+    return user

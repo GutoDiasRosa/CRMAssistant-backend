@@ -8,7 +8,7 @@ Com o CRM Assist, cada membro do time comercial consulta funil, leads, desempenh
 
 | Parte | Tecnologia | Onde |
 |---|---|---|
-| Backend (API) | Python, FastAPI, PostgreSQL, LangChain + Claude | [`backend/`](backend/README.md) |
+| Backend (API) | Python, FastAPI, PostgreSQL, Claude (SDK Anthropic) | [`backend/`](backend/README.md) |
 | Front-end | React, Vite, TypeScript, Tailwind | repositório [CRMAssistant](https://github.com/GutoDiasRosa/CRMAssistant) |
 
 ## Início rápido

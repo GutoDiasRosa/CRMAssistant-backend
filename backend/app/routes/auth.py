@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,16 +16,9 @@ from app.db.models import (
     Usuario,
 )
 from app.dependencies import get_current_user
-from app.security import create_access_token, hash_password, verify_password
+from app.security import create_access_token, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-class RegisterBody(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=6)
-    nome: str = Field(min_length=1, max_length=255)
-    perfil: str = Field(default="SDR", pattern="^(SDR|CLOSER|GERENTE|DIRETOR|ANALISTA)$")
 
 
 class LoginBody(BaseModel):
@@ -38,22 +31,18 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-@router.post("/register", response_model=TokenResponse)
-async def register(body: RegisterBody, session: Annotated[AsyncSession, Depends(get_session)]):
-    exists = await session.execute(select(Usuario.id).where(Usuario.email == body.email))
-    if exists.scalar_one_or_none():
-        raise HTTPException(status.HTTP_409_CONFLICT, "E-mail já cadastrado")
-    user = Usuario(
-        email=body.email,
-        hashed_password=hash_password(body.password),
-        nome=body.nome,
-        perfil=body.perfil,
+class UsuarioResponse(BaseModel):
+    id: str
+    email: str
+    nome: str
+    perfil: str
+
+
+@router.get("/me", response_model=UsuarioResponse, summary="Dados do usuário autenticado")
+async def me(current: Annotated[Usuario, Depends(get_current_user)]):
+    return UsuarioResponse(
+        id=str(current.id), email=current.email, nome=current.nome, perfil=current.perfil
     )
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
-    token = create_access_token(str(user.id), extra={"perfil": user.perfil})
-    return TokenResponse(access_token=token)
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -40,7 +40,7 @@ O CRM Assist remove esse gargalo: cada pessoa do time consulta os dados do CRM *
 | **RF03** | Sincronização automática de leads e oportunidades por webhook | `routes/webhooks_rd.py`, `core/rd_station_sync/` |
 | **RF04** | Funil de vendas em formato kanban | `GET /api/crm/kanban` |
 | **RF05** | Chatbot em linguagem natural (texto) | `POST /chat`, `services/crm_assistant_orchestrator_service.py` |
-| **RF06** | Resumo de leads, indicadores, performance do time e relatórios por período | Intenções em `core/agents/intent_router_crm.py` (ver [Status](#status-do-desenvolvimento)) |
+| **RF06** | Resumo de leads, indicadores, performance do time e relatórios por período | Ferramentas do chat em `core/agents/crm_tools.py` |
 | **RF07** | Controle de acesso por perfil | `domain/repositories/crm.py`, `dependencies.py` |
 | **LGPD** | Exclusão dos dados pessoais do próprio usuário | `DELETE /auth/me/lgpd` |
 
@@ -82,11 +82,20 @@ A API é organizada em camadas com responsabilidades separadas: rotas enxutas, u
 ### Fluxo do chat (`POST /chat`)
 
 1. O usuário autenticado envia uma mensagem e, opcionalmente, o `sessionId` de uma conversa existente.
-2. O orquestrador cria ou recupera a conversa e grava a mensagem na tabela `mensagem`.
-3. O **roteador de intenções** classifica a pergunta em uma das categorias: `consulta_funil`, `resumo_lead`, `indicadores_grafico`, `performance_time`, `relatorio_periodo`, `cumprimento` ou `fora_de_escopo`.
-4. Os repositórios montam o contexto numérico **já filtrado pelo perfil do usuário** (RF07).
-5. O modelo de linguagem (Claude, via LangChain) gera a resposta em português, com instrução para não inventar números. Se nenhuma chave de IA estiver configurada, o sistema responde com mensagens de *fallback*.
-6. A resposta é gravada na conversa e devolvida junto com a intenção detectada.
+2. O orquestrador cria ou recupera a conversa, carrega as últimas 20 mensagens como histórico e grava a nova mensagem na tabela `mensagem`.
+3. A pergunta vai para o **Claude** (SDK oficial `anthropic`) junto com o histórico e um conjunto de **ferramentas** (`core/agents/crm_tools.py`). O modelo decide quais consultar:
+
+   | Ferramenta | Retorna |
+   |---|---|
+   | `resumo_carteira` | Totais de leads e oportunidades, quantidade e valor por etapa |
+   | `listar_oportunidades` | Oportunidades filtradas por etapa e/ou nome |
+   | `detalhes_oportunidade` | Uma oportunidade com contato e histórico de interações |
+   | `buscar_leads` | Leads por nome ou e-mail e suas oportunidades |
+   | `performance_vendedores` | Quantidade e valor de oportunidades por vendedor |
+
+4. As ferramentas consultam o banco pelos repositórios, que **já filtram pelo perfil do usuário** (RF07). Um SDR não consegue ver dados de outra pessoa nem pedindo pelo chat.
+5. O modelo responde em português com base nos dados retornados, com instrução para não inventar números. Se ele recusar um pedido por política de segurança, a API refaz o pedido no modelo de *fallback* recomendado (`fallbacks: "default"`).
+6. A resposta é gravada na conversa e devolvida ao front. Sem `ANTHROPIC_API_KEY`, o chat responde com mensagens simples de *fallback*.
 
 ### Fluxo da sincronização (`POST /webhooks/rd-station`)
 
@@ -104,7 +113,7 @@ A migração inicial está em `alembic/versions/001_initial_schema.py`.
 
 | Tabela | Finalidade |
 |---|---|
-| `usuario` | Membros da equipe, com perfil (`SDR`, `CLOSER`, `GERENTE`, `DIRETOR`, `ANALISTA`) |
+| `usuario` | Membros da equipe, com perfil (`SDR`, `CLOSER`, `GERENTE`, `DIRETOR`, `ANALISTA`, `ADMIN`) |
 | `leads` | Leads sincronizados do RD Station, vinculados ao vendedor responsável |
 | `oportunidade` | Negociações, com etapa do funil, valor e status |
 | `interacao` | Histórico de contatos e anotações de uma oportunidade |
@@ -133,7 +142,7 @@ usuario 1───* leads 1───* oportunidade 1───* interacao
 | Banco de dados | PostgreSQL 16 |
 | ORM e migrações | SQLAlchemy 2 (async, asyncpg) + Alembic |
 | Autenticação | JWT (python-jose) + bcrypt (passlib) |
-| IA | LangChain + Anthropic Claude |
+| IA | Claude (SDK oficial `anthropic`) com tool use |
 | Integração HTTP | httpx |
 | Testes e qualidade | pytest, ruff |
 | Infraestrutura | Docker e Docker Compose |
@@ -166,6 +175,14 @@ Para habilitar a IA e o RD Station, defina as variáveis no terminal ou num arqu
 
 Pré-requisitos: Python 3.11+ e um PostgreSQL acessível.
 
+Crie o usuário `crm` e o banco `crmassistant` (pede a senha do superusuário `postgres`):
+
+```bash
+psql -U postgres -h localhost -f backend/scripts/criar_banco_local.sql
+```
+
+> No Windows, o `psql` fica em `C:\Program Files\PostgreSQL\<versão>\bin\psql.exe`.
+
 ```bash
 cd backend
 python -m venv .venv
@@ -179,6 +196,12 @@ Ajuste `POSTGRES_URL` e `JWT_SECRET` no `.env` e inicie a API:
 
 ```bash
 uvicorn app.main:app --reload --port 8000
+```
+
+Para ter usuários (incluindo um administrador) e dados de exemplo, rode o script de demonstração. As credenciais estão no início do arquivo `scripts/seed_dev.py`:
+
+```bash
+python -m scripts.seed_dev
 ```
 
 As migrações (`alembic upgrade head`) rodam automaticamente na inicialização. Para desativar, defina `SKIP_ALEMBIC_ON_STARTUP=1`.
@@ -195,7 +218,8 @@ As migrações (`alembic upgrade head`) rodam automaticamente na inicialização
 | `JWT_SECRET` | Sim | `change-me` | Chave de assinatura dos tokens. **Troque em produção** |
 | `CORS_ORIGINS` | Não | `*` | Origens permitidas, separadas por vírgula (ex.: `http://localhost:5173`) |
 | `ANTHROPIC_API_KEY` | Não | — | Chave da API do Claude. Sem ela, o chat usa respostas de *fallback* |
-| `ANTHROPIC_MODEL` | Não | `claude-3-5-haiku-20241022` | Modelo usado pelo assistente |
+| `ANTHROPIC_MODEL` | Não | `claude-opus-5` | Modelo usado pelo assistente |
+| `ANTHROPIC_EFFORT` | Não | `low` | Nível de esforço do modelo (`low`, `medium`, `high`...). `low` mantém o chat rápido |
 | `RD_CLIENT_ID` | Para o RF02 | — | Client ID do app no RD Station |
 | `RD_CLIENT_SECRET` | Para o RF02 | — | Client secret do app no RD Station |
 | `RD_REDIRECT_URI` | Para o RF02 | `http://localhost:8000/oauth/rd/callback` | URL de retorno do OAuth |
@@ -208,17 +232,20 @@ As migrações (`alembic upgrade head`) rodam automaticamente na inicialização
 
 ## Endpoints
 
-Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`.
+Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. Os marcados com 👑 são exclusivos do perfil `ADMIN`: não existe cadastro público, e todo usuário é criado por um administrador.
 
 | Método | Caminho | Descrição |
 |---|---|---|
 | GET | `/health` | Verificação de saúde da API |
-| POST | `/auth/register` | Cadastro de usuário (retorna JWT) |
 | POST | `/auth/login` | Login (retorna JWT) |
+| GET | `/auth/me` 🔒 | Dados do usuário autenticado (nome, e-mail, perfil) |
+| GET | `/usuarios` 🔒 👑 | Lista os usuários |
+| POST | `/usuarios` 🔒 👑 | Cadastra um usuário com perfil |
 | DELETE | `/auth/me/lgpd` 🔒 | Exclui o usuário e as conversas dele; desvincula leads e oportunidades |
 | POST | `/chat` 🔒 | Envia uma mensagem ao assistente |
 | GET | `/api/crm/kanban` 🔒 | Oportunidades agrupadas por etapa do funil |
-| GET | `/api/crm/metricas` 🔒 | Totais de leads e oportunidades |
+| GET | `/api/crm/metricas` 🔒 | Totais e valor somado de leads e oportunidades |
+| GET | `/api/crm/sincronizacoes` 🔒 | Últimas sincronizações recebidas do RD Station |
 | GET | `/oauth/rd/authorize` | Redireciona para a autorização no RD Station |
 | GET | `/oauth/rd/callback` | Recebe o `code` do RD e armazena os tokens |
 | GET | `/oauth/rd/status` 🔒 | Indica se o RD Station já está conectado |
@@ -287,6 +314,7 @@ O controle de acesso (RF07) é aplicado nos **repositórios**. Assim, qualquer c
 | `GERENTE` | Todos os dados da equipe |
 | `DIRETOR` | Todos os dados da equipe |
 | `ANALISTA` | Todos os dados da equipe |
+| `ADMIN` | Todos os dados da equipe e gestão de usuários |
 
 ---
 
@@ -299,7 +327,8 @@ backend/
 ├── app/
 │   ├── core/
 │   │   ├── agents/
-│   │   │   └── intent_router_crm.py   # Classificação de intenção do chat
+│   │   │   ├── crm_tools.py         # Ferramentas que o Claude usa para consultar o CRM
+│   │   │   └── intent_router_crm.py   # Classificação simples de intenção
 │   │   └── rd_station_sync/           # Integração com o RD Station
 │   │       ├── normalize.py           #   extrai e mapeia campos do payload
 │   │       ├── process.py             #   fluxo de processamento do evento
@@ -358,8 +387,8 @@ SKIP_ALEMBIC_ON_STARTUP=1 python -m pytest -q
 
 - [ ] Integração com o front-end (React + Vite)
 - [ ] Recuperação de senha (RF01)
-- [ ] Classificação de intenção com LLM no lugar das palavras-chave atuais
-- [ ] Ferramentas específicas por intenção no chat: resumo de lead, gráficos, performance por vendedor e relatório por período (RF06)
+- [ ] Gráficos de indicadores gerados pelo chat (RF06)
+- [ ] Relatório de vendas por período no chat (RF06), que depende de datas de fechamento vindas do RD Station
 - [ ] Renovação automática do token OAuth (refresh token)
 - [ ] Sincronização periódica como alternativa ao webhook (RNF de até 5 minutos)
 - [ ] Ampliar a cobertura de testes

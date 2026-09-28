@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_session
-from app.db.models import Usuario
+from app.db.models import Sincronizacao, Usuario
 from app.dependencies import get_current_user
 from app.domain.repositories.crm import OportunidadeRepository
 
@@ -27,3 +28,22 @@ async def metricas(
 ):
     repo = OportunidadeRepository(session, user)
     return await repo.metricas_resumo()
+
+
+@router.get("/sincronizacoes", summary="Últimas sincronizações recebidas do RD Station")
+async def sincronizacoes(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    _: Annotated[Usuario, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+):
+    stmt = select(Sincronizacao).order_by(Sincronizacao.created_at.desc()).limit(limit)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": str(s.id),
+            "status": s.status,
+            "event_type": s.event_type,
+            "created_at": s.created_at.isoformat(),
+        }
+        for s in rows
+    ]
