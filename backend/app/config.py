@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     rd_redirect_uri: str = "http://localhost:8000/oauth/rd/callback"
     rd_oauth_authorize_url: str = "https://api.rd.services/auth/dialog"
     rd_oauth_token_url: str = "https://api.rd.services/auth/token"
+    rd_api_url: str = "https://api.rd.services"
     # Tela do front-end para onde o callback OAuth devolve o usuário
     frontend_url: str = "http://localhost:5173"
     # Endereço público da API. No Render vem sozinho de RENDER_EXTERNAL_URL.

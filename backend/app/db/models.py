@@ -176,14 +176,28 @@ class RdStationToken(Base):
 
 
 class RdStationConfig(Base):
-    """Credenciais do app RD Station cadastradas pela tela de integração (registro único)."""
+    """Configuração da integração com o RD Station cadastrada pela tela (registro único)."""
 
     __tablename__ = "rd_station_config"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    client_id: Mapped[str] = mapped_column(String(255))
-    client_secret: Mapped[str] = mapped_column(Text)
+    # Liga/desliga o recebimento de dados sem apagar a configuração.
+    ativo: Mapped[bool] = mapped_column(default=True, server_default="true")
+    # App criado na RD Station App Store (OAuth2).
+    client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Responsável atribuído aos leads/oportunidades novos que chegam sem dono.
+    usuario_integracao_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("usuario.id", ondelete="SET NULL"), nullable=True
+    )
+    # Tokens da API legada (RD Station > Integrações > Dados de integração).
+    token_publico: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_privado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Vai na URL do webhook (?token=...): o RD Station não envia cabeçalhos personalizados.
+    webhook_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    usuario_integracao: Mapped["Usuario | None"] = relationship()
