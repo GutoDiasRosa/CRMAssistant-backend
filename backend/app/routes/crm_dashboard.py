@@ -30,6 +30,23 @@ async def kanban(
     return await repo.kanban_por_etapa(usuario_id=usuario_id, inicio=inicio, fim=fim)
 
 
+@router.get("/performance", summary="Performance do time por vendedor (RF06 + RF07)")
+async def performance(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[Usuario, Depends(get_current_user)],
+    inicio: Annotated[
+        datetime | None, Query(description="Oportunidades criadas a partir deste instante (ISO 8601, inclusive)")
+    ] = None,
+    fim: Annotated[
+        datetime | None, Query(description="Oportunidades criadas antes deste instante (ISO 8601)")
+    ] = None,
+):
+    if inicio and fim and inicio >= fim:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Início do período deve ser antes do fim")
+    repo = OportunidadeRepository(session, user)
+    return await repo.performance_time(inicio=inicio, fim=fim)
+
+
 @router.get("/vendedores", summary="Vendedores disponíveis para filtro (RF07)")
 async def vendedores(
     session: Annotated[AsyncSession, Depends(get_session)],

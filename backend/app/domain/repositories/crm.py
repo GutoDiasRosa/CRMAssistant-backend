@@ -1,12 +1,15 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
+
+# Status de oportunidade ganha (o RD Station CRM usa "won"; aceitamos variações em português).
+STATUS_GANHO = ("won", "ganho", "ganha")
 
 
 class LeadRepository:
@@ -149,6 +152,70 @@ class OportunidadeRepository:
             }
             for nome, perfil, qtd, valor in rows
         ]
+
+    async def performance_time(
+        self,
+        *,
+        inicio: datetime | None = None,
+        fim: datetime | None = None,
+    ) -> dict:
+        """Prospectados, qualificados e fechados por vendedor no período (RF06 + RF07).
+
+        - prospectados: oportunidades que entraram no CRM Assist no período (created_at);
+        - qualificados: dessas, as que já passaram da etapa de prospecção (ou foram ganhas);
+        - fechados: dessas, as ganhas (status "won").
+        Vendedores (SDR/CLOSER) ativos aparecem mesmo sem oportunidades; os demais perfis
+        só aparecem se forem responsáveis por alguma. Perfis sem visão total recebem só a própria linha.
+        """
+        status = func.lower(func.coalesce(Oportunidade.status, ""))
+        ganho = status.in_(STATUS_GANHO)
+        etapa = func.lower(func.coalesce(Oportunidade.etapa_funil, ""))
+        qualificado = or_(ganho, and_(etapa != "", ~etapa.like("prospec%")))
+
+        condicao_join = [Oportunidade.usuario_id == Usuario.id]
+        if inicio:
+            condicao_join.append(Oportunidade.created_at >= inicio)
+        if fim:
+            condicao_join.append(Oportunidade.created_at < fim)
+
+        prospectados = func.count(Oportunidade.id)
+        stmt = (
+            select(
+                Usuario.id,
+                Usuario.nome,
+                Usuario.perfil,
+                prospectados,
+                func.count(case((qualificado, Oportunidade.id))),
+                func.count(case((ganho, Oportunidade.id))),
+                func.coalesce(func.sum(case((ganho, Oportunidade.valor))), 0),
+            )
+            .outerjoin(Oportunidade, and_(*condicao_join))
+            .where(Usuario.ativo.is_(True))
+            .group_by(Usuario.id, Usuario.nome, Usuario.perfil)
+            .having(or_(prospectados > 0, Usuario.perfil.in_(("SDR", "CLOSER"))))
+            .order_by(Usuario.nome)
+        )
+        if not pode_ver_todos_oportunidades(self.usuario):
+            stmt = stmt.where(Usuario.id == self.usuario.id)
+        rows = (await self.session.execute(stmt)).all()
+
+        vendedores = [
+            {
+                "id": str(uid),
+                "nome": nome,
+                "perfil": perfil,
+                "prospectados": int(n_prosp),
+                "qualificados": int(n_qual),
+                "fechados": int(n_fech),
+                "valor_fechado": float(valor),
+            }
+            for uid, nome, perfil, n_prosp, n_qual, n_fech, valor in rows
+        ]
+        totais = {
+            chave: sum(v[chave] for v in vendedores)
+            for chave in ("prospectados", "qualificados", "fechados", "valor_fechado")
+        }
+        return {"vendedores": vendedores, "totais": totais}
 
     async def metricas_resumo(self) -> dict:
         """Contagens agregadas respeitando RF07."""
