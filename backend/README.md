@@ -200,7 +200,9 @@ Ajuste `POSTGRES_URL` e `JWT_SECRET` no `.env` e inicie a API:
 uvicorn app.main:app --reload --port 8000
 ```
 
-Para ter usuários (incluindo um administrador) e dados de exemplo, rode o script de demonstração. As credenciais estão no início do arquivo `scripts/seed_dev.py`:
+Ao criar o banco, as migrações já cadastram o administrador padrão **`admin@crmassist.dev` / `admin`** (migração `003_admin_padrao`; se o e-mail já existir, nada é alterado).
+
+Para ter outros usuários e dados de exemplo, rode o script de demonstração. As credenciais estão no início do arquivo `scripts/seed_dev.py`:
 
 ```bash
 python -m scripts.seed_dev
@@ -227,10 +229,10 @@ Cada `git push` na `main` gera um novo deploy do serviço correspondente. As mig
 1. No [Neon](https://neon.com), crie um projeto na região **AWS US East (N. Virginia)** e copie a *connection string* **direta** (sem `-pooler` no host).
 2. No [Render](https://render.com), conecte o GitHub com acesso aos dois repositórios e crie um *Blueprint* a partir deste repositório. Na criação, informe `POSTGRES_URL` (a string do Neon); `RD_WEBHOOK_SECRET` e `ANTHROPIC_API_KEY` podem ficar vazios por enquanto.
 3. Confira as URLs geradas. Se o Render acrescentou um sufixo aos nomes, ajuste `FRONTEND_URL`/`CORS_ORIGINS` na API e `VITE_API_URL` no front.
-4. Crie o primeiro administrador a partir da sua máquina, apontando para o banco do Neon (o plano grátis do Render não tem console):
+4. As migrações criam o administrador padrão `admin@crmassist.dev` / `admin`. **Troque essa senha logo após o primeiro deploy**, por exemplo redefinindo-a a partir da sua máquina, apontando para o banco do Neon (o plano grátis do Render não tem console):
    ```powershell
    $env:POSTGRES_URL = "<connection string do Neon>"
-   python -m scripts.criar_admin voce@empresa.com "Seu Nome"
+   python -m scripts.criar_admin admin@crmassist.dev "Administrador"
    ```
 5. No plano grátis a API hiberna após 15 minutos sem acesso e leva cerca de 1 minuto para voltar. Para receber webhooks sem atraso, agende no [cron-job.org](https://cron-job.org) (grátis) um `GET https://crmassistant-api.onrender.com/health` a cada 10 minutos.
 6. Entre no sistema e abra **Integração RD**. As URLs de callback e de webhook exibidas ali já são as públicas; cadastre-as no aplicativo do RD Station.

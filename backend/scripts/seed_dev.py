@@ -8,7 +8,7 @@ Uso (dentro de backend/, com o .venv ativo):
     python -m scripts.seed_dev
 
 Credenciais de desenvolvimento criadas (NÃO use em produção):
-    admin@crmassist.dev    / demo1234  -> perfil ADMIN   (vê tudo e gerencia usuários)
+    admin@crmassist.dev    / admin     -> perfil ADMIN   (criado pela migração 003; o seed não o altera)
     gerente@crmassist.dev  / demo1234  -> perfil GERENTE (vê todo o time)
     sdr@crmassist.dev      / demo1234  -> perfil SDR     (vê só a própria carteira)
     closer@crmassist.dev   / demo1234  -> perfil CLOSER  (vê só a própria carteira)
