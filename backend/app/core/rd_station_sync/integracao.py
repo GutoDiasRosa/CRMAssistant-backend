@@ -60,7 +60,8 @@ async def obter_config(session: AsyncSession) -> RdStationConfig | None:
 async def obter_ou_criar_config(session: AsyncSession) -> RdStationConfig:
     config = await obter_config(session)
     if config is None:
-        config = RdStationConfig(ativo=True, webhook_token=novo_webhook_token())
+        # Começa desativada: o administrador liga no passo "Ativar integração".
+        config = RdStationConfig(ativo=False, webhook_token=novo_webhook_token())
         session.add(config)
         await session.flush()
     elif not config.webhook_token:

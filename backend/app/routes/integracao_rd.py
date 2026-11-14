@@ -376,15 +376,20 @@ async def rd_callback(
 @router.delete(
     "/conexao",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Desconecta o RD Station, removendo os webhooks e apagando os tokens OAuth (admin)",
+    summary="Desconecta e reinicia a integração: remove os webhooks no RD e apaga tokens, credenciais e configuração (admin)",
 )
 async def desconectar(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     _: Annotated[Usuario, Depends(get_current_admin)],
 ):
+    # Remove os webhooks no RD enquanto ainda há token; depois apaga tudo da integração.
     await _desfazer_autorizacao(session, request)
+    await session.execute(delete(RdStationConfig))
+    # O histórico de eventos da conexão anterior não vale para a próxima.
+    await session.execute(delete(Sincronizacao).where(Sincronizacao.fonte.in_((FONTE_WEBHOOK, "envio_rd"))))
     await session.commit()
+    # Leads e oportunidades já sincronizados continuam no CRM Assist.
 
 
 @router.get("/status", summary="Indica se o RD Station está autorizado (requer usuário autenticado)")
