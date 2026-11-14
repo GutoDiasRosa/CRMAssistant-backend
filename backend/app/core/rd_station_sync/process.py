@@ -83,6 +83,10 @@ async def process_rd_webhook_payload(
     if rd_id and evento in EVENTOS_NEGOCIACAO:
         campos = normalize.map_negociacao(doc)
         dono_id = await _usuario_por_email(session, campos["dono_email"])
+        # Data de fechamento que já existia aqui (antes deste evento).
+        fechada_antes = (
+            await session.execute(select(Oportunidade.fechada_em).where(Oportunidade.rd_deal_id == rd_id))
+        ).scalar_one_or_none()
         op = await upsert_oportunidade(
             session,
             rd_deal_id=rd_id,
@@ -96,9 +100,11 @@ async def process_rd_webhook_payload(
         )
         if dono_id:
             op.usuario_id = dono_id  # responsável trocado no RD
+        # Fechada agora, por este evento: a data do RD vale mais que a hora em que o evento chegou.
+        # Já fechada antes (pela tela, por um script ou por um envio ao RD), a data daqui fica.
         fechada_no_rd = normalize.data_fechamento(doc)
-        if fechada_no_rd and op.fechada_em is not None:
-            op.fechada_em = fechada_no_rd  # a data do RD vale mais que a hora em que o evento chegou
+        if fechada_no_rd and op.fechada_em is not None and fechada_antes is None:
+            op.fechada_em = fechada_no_rd
         if op.lead_id is None:
             await _vincular_contato(session, op, usuario_padrao_id)
     elif rd_id and evento == "crm_deal_deleted":

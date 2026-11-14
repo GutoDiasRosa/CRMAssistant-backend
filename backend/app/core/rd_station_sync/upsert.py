@@ -7,6 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Lead, Oportunidade, Sincronizacao
 
 
+def _juntar(atuais: dict[str, Any] | None, novos: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Atualiza os dados extras sem apagar os gravados aqui (ex.: empresa, produto, motivo da perda,
+    marca da carga de demonstração): as chaves que vêm do RD sobrescrevem só as de mesmo nome."""
+    if novos is None:
+        return atuais
+    return {**(atuais or {}), **novos}
+
+
 async def upsert_lead(
     session: AsyncSession,
     *,
@@ -25,7 +33,7 @@ async def upsert_lead(
         row.email = email if email is not None else row.email
         row.telefone = telefone if telefone is not None else row.telefone
         row.status = status if status is not None else row.status
-        row.dados_extras = dados_extras if dados_extras is not None else row.dados_extras
+        row.dados_extras = _juntar(row.dados_extras, dados_extras)
         if usuario_id and row.usuario_id is None:
             row.usuario_id = usuario_id
         await session.flush()
@@ -66,7 +74,7 @@ async def upsert_oportunidade(
         row.rd_stage_id = rd_stage_id if rd_stage_id is not None else row.rd_stage_id
         row.valor = valor if valor is not None else row.valor
         row.status = status if status is not None else row.status
-        row.dados_extras = dados_extras if dados_extras is not None else row.dados_extras
+        row.dados_extras = _juntar(row.dados_extras, dados_extras)
         if lead_id and row.lead_id is None:
             row.lead_id = lead_id
         if usuario_id and row.usuario_id is None:
