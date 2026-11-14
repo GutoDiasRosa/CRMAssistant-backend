@@ -15,6 +15,7 @@ from app.routes import (
     crm_dashboard,
     health,
     integracao_rd,
+    leads,
     oportunidades,
     usuarios,
     webhooks_rd,
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_crm.router)
     app.include_router(crm_dashboard.router)
     app.include_router(oportunidades.router)
+    app.include_router(leads.router)
     return app
 
 

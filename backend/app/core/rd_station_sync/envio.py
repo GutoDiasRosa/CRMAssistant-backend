@@ -193,6 +193,26 @@ async def enviar_oportunidade(session: AsyncSession, op_id: UUID) -> None:
                 raise
 
 
+async def enviar_lead(session: AsyncSession, lead_id: UUID) -> None:
+    """Cria ou atualiza no RD Station CRM o contato correspondente ao lead. Faz commit."""
+    access = await integracao.access_token_valido(session)
+    await session.commit()
+    lead = await session.get(Lead, lead_id, populate_existing=True)
+    contato_id = await enviar_contato(
+        access, rd_id=lead.rd_lead_id, nome=lead.nome, email=lead.email, telefone=lead.telefone
+    )
+    for tentativa in (1, 2):
+        try:
+            lead = await session.get(Lead, lead_id, populate_existing=True)
+            await vincular_lead(session, lead, contato_id)
+            await session.commit()
+            return
+        except IntegrityError:
+            await session.rollback()
+            if tentativa == 2:
+                raise
+
+
 async def enviar_contato_teste(session: AsyncSession) -> dict[str, Any]:
     """Cria (ou atualiza) o contato de teste no RD Station CRM e o grava como lead local.
 

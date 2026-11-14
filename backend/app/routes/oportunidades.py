@@ -1,5 +1,6 @@
 """Oportunidades criadas e editadas no CRM Assist, sincronizadas com o RD Station CRM."""
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -37,6 +38,8 @@ class OportunidadeBody(BaseModel):
     status: StatusOportunidade = "ongoing"
     # Sem valor, o responsável é quem cria. Perfis sem visão total só atribuem a si mesmos.
     usuario_id: UUID | None = None
+    # Lead já existente (ex.: "Nova oportunidade" na tela do lead). `contato` atualiza os dados dele.
+    lead_id: UUID | None = None
     contato: ContatoBody | None = None
 
 
@@ -143,7 +146,7 @@ async def _salvar_contato(
     """Atualiza o contato da oportunidade; sem um, reaproveita o lead de mesmo e-mail ou cria outro."""
     email = str(contato.email) if contato.email else None
     telefone = (contato.telefone or "").strip() or None
-    lead = op.lead if op.lead_id else None
+    lead = await session.get(Lead, op.lead_id) if op.lead_id else None
     if lead is None and email:
         lead = (
             await session.execute(select(Lead).where(func.lower(Lead.email) == email.lower()).limit(1))
@@ -167,28 +170,40 @@ def _aplicar(op: Oportunidade, body: OportunidadeBody, responsavel_id: UUID) -> 
     op.usuario_id = responsavel_id
 
 
-async def _enviar_ao_rd(session: AsyncSession, op_id: UUID) -> EnvioRd:
-    """Envia a oportunidade já gravada ao RD Station CRM; uma falha não desfaz o que foi salvo."""
+async def enviar_ao_rd(
+    session: AsyncSession,
+    enviar: Callable[[AsyncSession, UUID], Awaitable[None]],
+    entidade: str,
+    entidade_id: UUID,
+) -> EnvioRd:
+    """Envia ao RD Station CRM um registro já gravado; uma falha não desfaz o que foi salvo."""
     if await integracao.obter_token(session) is None:
         return EnvioRd(enviado=False, mensagem="RD Station não conectado: ficou só no CRM Assist.")
     config = await integracao.obter_config(session)
     if config is not None and not config.ativo:
         return EnvioRd(enviado=False, mensagem="Integração com o RD Station desativada: ficou só no CRM Assist.")
     try:
-        await envio.enviar_oportunidade(session, op_id)
+        await enviar(session, entidade_id)
         return EnvioRd(enviado=True)
     except RdStationErro as e:
         await session.rollback()
         await log_sync(
             session,
             fonte="envio_rd",
-            event_type="oportunidade",
+            event_type=entidade,
             rd_entity_id=None,
             status="error",
-            detalhe={"erro": str(e), "oportunidade_id": str(op_id)},
+            detalhe={"erro": str(e), f"{entidade}_id": str(entidade_id)},
         )
         await session.commit()
-        return EnvioRd(enviado=False, mensagem=f"Salva no CRM Assist, mas não enviada ao RD Station: {e}")
+        return EnvioRd(enviado=False, mensagem=f"Gravado no CRM Assist, mas não enviado ao RD Station: {e}")
+
+
+async def _lead_permitido(session: AsyncSession, user: Usuario, lead_id: UUID) -> Lead:
+    lead = await session.get(Lead, lead_id)
+    if lead is None or (not pode_ver_todos_oportunidades(user) and lead.usuario_id != user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead não encontrado")
+    return lead
 
 
 @router.get("/etapas", summary="Funis e etapas para criar oportunidades (do RD Station CRM, se conectado)")
@@ -245,13 +260,15 @@ async def criar(
     responsavel_id = await _responsavel(session, user, body.usuario_id)
     op = Oportunidade()
     _aplicar(op, body, responsavel_id)
+    if body.lead_id:
+        op.lead_id = (await _lead_permitido(session, user, body.lead_id)).id
     session.add(op)
     await session.flush()
     if body.contato:
         await _salvar_contato(session, op, body.contato, responsavel_id)
     await session.commit()
     op_id = op.id  # uma falha no envio faz rollback e expira o objeto
-    rd = await _enviar_ao_rd(session, op_id)
+    rd = await enviar_ao_rd(session, envio.enviar_oportunidade, "oportunidade", op_id)
     return OportunidadeResposta(oportunidade=_detalhe(await _carregar(session, user, op_id)), rd=rd)
 
 
@@ -269,8 +286,10 @@ async def atualizar(
     op = await _carregar(session, user, op_id)
     responsavel_id = await _responsavel(session, user, body.usuario_id or op.usuario_id)
     _aplicar(op, body, responsavel_id)
+    if body.lead_id:
+        op.lead_id = (await _lead_permitido(session, user, body.lead_id)).id
     if body.contato:
         await _salvar_contato(session, op, body.contato, responsavel_id)
     await session.commit()
-    rd = await _enviar_ao_rd(session, op_id)
+    rd = await enviar_ao_rd(session, envio.enviar_oportunidade, "oportunidade", op_id)
     return OportunidadeResposta(oportunidade=_detalhe(await _carregar(session, user, op_id)), rd=rd)

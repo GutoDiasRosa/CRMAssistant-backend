@@ -287,6 +287,10 @@ Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. 
 | GET | `/api/crm/kanban` 🔒 | Oportunidades agrupadas por etapa do funil |
 | GET | `/api/crm/metricas` 🔒 | Totais e valor somado de leads e oportunidades |
 | GET | `/api/crm/sincronizacoes` 🔒 | Últimas sincronizações recebidas do RD Station |
+| GET | `/api/crm/leads` 🔒 | Lista os leads, com busca (`busca`) e filtro por vendedor (`usuario_id`) (RF07) |
+| GET | `/api/crm/leads/{id}` 🔒 | Detalhe do lead com as oportunidades dele (RF07) |
+| POST | `/api/crm/leads` 🔒 | Cria um lead e o envia ao RD Station CRM como contato |
+| PUT | `/api/crm/leads/{id}` 🔒 | Atualiza um lead e envia a alteração ao RD Station CRM |
 | GET | `/api/crm/etapas` 🔒 | Funis e etapas do RD Station CRM (ou, sem RD, as etapas já usadas no CRM Assist) |
 | GET | `/api/crm/oportunidades/{id}` 🔒 | Detalhe da oportunidade, com contato, responsável e interações (RF07) |
 | POST | `/api/crm/oportunidades` 🔒 | Cria uma oportunidade e a envia ao RD Station CRM |
