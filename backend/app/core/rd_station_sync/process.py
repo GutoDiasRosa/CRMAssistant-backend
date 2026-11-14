@@ -96,6 +96,9 @@ async def process_rd_webhook_payload(
         )
         if dono_id:
             op.usuario_id = dono_id  # responsável trocado no RD
+        fechada_no_rd = normalize.data_fechamento(doc)
+        if fechada_no_rd and op.fechada_em is not None:
+            op.fechada_em = fechada_no_rd  # a data do RD vale mais que a hora em que o evento chegou
         if op.lead_id is None:
             await _vincular_contato(session, op, usuario_padrao_id)
     elif rd_id and evento == "crm_deal_deleted":

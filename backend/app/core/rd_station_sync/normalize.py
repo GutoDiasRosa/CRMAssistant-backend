@@ -5,6 +5,7 @@ Envelope: {"event_name": "crm_deal_updated", "event_timestamp": ..., "transactio
 contatos, com emails/phones em listas.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -68,3 +69,15 @@ def map_contato(doc: dict[str, Any]) -> dict[str, Any]:
         "email": _texto(_primeiro(doc.get("emails"), "email"), 255),
         "telefone": _texto(_primeiro(doc.get("phones"), "phone"), 64),
     }
+
+
+def data_fechamento(doc: dict[str, Any]) -> datetime | None:
+    """Data em que a negociação foi ganha ou perdida no RD (`closed_at`), se o evento trouxer."""
+    valor = doc.get("closed_at")
+    if not isinstance(valor, str) or not valor.strip():
+        return None
+    try:
+        data = datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return data if data.tzinfo else data.replace(tzinfo=UTC)

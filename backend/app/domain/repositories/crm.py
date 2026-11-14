@@ -1,15 +1,32 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Interacao, Lead, Oportunidade, Usuario
+from app.db.models import STATUS_FECHADO, STATUS_GANHO, STATUS_PERDIDO, Interacao, Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
 
-# Status de oportunidade ganha (o RD Station CRM usa "won"; aceitamos variações em português).
-STATUS_GANHO = ("won", "ganho", "ganha")
+_STATUS = func.lower(func.coalesce(Oportunidade.status, ""))
+
+
+def _no_periodo(coluna, inicio: datetime | None, fim: datetime | None):
+    """Condição `inicio <= coluna < fim` (cada limite é opcional)."""
+    condicoes = []
+    if inicio:
+        condicoes.append(coluna >= inicio)
+    if fim:
+        condicoes.append(coluna < fim)
+    return and_(*condicoes) if condicoes else true()
+
+
+def _contar(condicao):
+    return func.count(case((condicao, Oportunidade.id)))
+
+
+def _somar(condicao):
+    return func.coalesce(func.sum(case((condicao, Oportunidade.valor))), 0)
 
 
 class LeadRepository:
@@ -39,6 +56,18 @@ class LeadRepository:
         )
         r = await self.session.execute(stmt)
         return list(r.scalars().all())
+
+    async def obter(self, lead_id: UUID) -> Lead | None:
+        """Lead pelo id (com responsável e oportunidades), respeitando RF07."""
+        stmt = self._scoped_filter(
+            select(Lead)
+            .options(
+                selectinload(Lead.usuario),
+                selectinload(Lead.oportunidades).selectinload(Oportunidade.usuario),
+            )
+            .where(Lead.id == lead_id)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_by_rd_id(self, rd_lead_id: str) -> Lead | None:
         stmt = select(Lead).where(Lead.rd_lead_id == rd_lead_id)
@@ -109,9 +138,20 @@ class OportunidadeRepository:
         return buckets
 
     async def buscar(
-        self, termo: str | None = None, etapa: str | None = None, limit: int = 50
+        self,
+        termo: str | None = None,
+        etapa: str | None = None,
+        limit: int = 50,
+        *,
+        situacao: str | None = None,
+        inicio: datetime | None = None,
+        fim: datetime | None = None,
     ) -> list[Oportunidade]:
-        """Filtra por nome da oportunidade/contato e/ou etapa, respeitando RF07."""
+        """Filtra por nome da oportunidade/contato, etapa, situação e período, respeitando RF07.
+
+        `situacao`: "abertas" (em andamento ou pausadas), "ganhas" ou "perdidas". O período vale
+        pela data de fechamento nas ganhas/perdidas e pela data de criação nos demais casos.
+        """
         stmt = select(Oportunidade).options(
             selectinload(Oportunidade.lead),
             selectinload(Oportunidade.usuario),
@@ -124,34 +164,30 @@ class OportunidadeRepository:
             )
         if etapa:
             stmt = stmt.where(Oportunidade.etapa_funil.ilike(f"%{etapa.strip()}%"))
+        if situacao == "ganhas":
+            stmt = stmt.where(_STATUS.in_(STATUS_GANHO))
+        elif situacao == "perdidas":
+            stmt = stmt.where(_STATUS.in_(STATUS_PERDIDO))
+        elif situacao == "abertas":
+            stmt = stmt.where(~_STATUS.in_(STATUS_FECHADO))
+        data = Oportunidade.fechada_em if situacao in ("ganhas", "perdidas") else Oportunidade.created_at
+        stmt = stmt.where(_no_periodo(data, inicio, fim))
         stmt = self._scoped_filter(stmt.order_by(Oportunidade.valor.desc().nulls_last()).limit(limit))
         r = await self.session.execute(stmt)
         return list(r.scalars().unique().all())
 
-    async def performance_por_vendedor(self) -> list[dict]:
-        """Totais por responsável (RF06). Perfis sem visão total recebem só a própria linha."""
-        stmt = (
-            select(
-                Usuario.nome,
-                Usuario.perfil,
-                func.count(Oportunidade.id),
-                func.coalesce(func.sum(Oportunidade.valor), 0),
+    async def obter(self, op_id: UUID) -> Oportunidade | None:
+        """Oportunidade pelo id (com contato, responsável e anotações), respeitando RF07."""
+        stmt = self._scoped_filter(
+            select(Oportunidade)
+            .options(
+                selectinload(Oportunidade.lead),
+                selectinload(Oportunidade.usuario),
+                selectinload(Oportunidade.interacoes).selectinload(Interacao.autor),
             )
-            .join(Oportunidade, Oportunidade.usuario_id == Usuario.id)
-            .group_by(Usuario.id, Usuario.nome, Usuario.perfil)
-            .order_by(func.coalesce(func.sum(Oportunidade.valor), 0).desc())
+            .where(Oportunidade.id == op_id)
         )
-        stmt = self._scoped_filter(stmt)
-        rows = (await self.session.execute(stmt)).all()
-        return [
-            {
-                "vendedor": nome,
-                "perfil": perfil,
-                "oportunidades": int(qtd),
-                "valor_total": float(valor),
-            }
-            for nome, perfil, qtd, valor in rows
-        ]
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def performance_time(
         self,
@@ -159,75 +195,92 @@ class OportunidadeRepository:
         inicio: datetime | None = None,
         fim: datetime | None = None,
     ) -> dict:
-        """Prospectados, qualificados e fechados por vendedor no período (RF06 + RF07).
+        """Números por vendedor no período (RF06 + RF07).
 
-        - prospectados: oportunidades que entraram no CRM Assist no período (created_at);
+        Pela data de criação (created_at), as oportunidades que entraram no período:
+        - prospectados / valor_prospectado: quantidade e valor;
         - qualificados: dessas, as que já passaram da etapa de prospecção (ou foram ganhas);
-        - fechados: dessas, as ganhas (status "won").
-        Vendedores (SDR/CLOSER) ativos aparecem mesmo sem oportunidades; os demais perfis
-        só aparecem se forem responsáveis por alguma. Perfis sem visão total recebem só a própria linha.
+        - convertidos: dessas, as já ganhas (base da taxa de conversão).
+        Pela data de fechamento (fechada_em), o que foi encerrado no período:
+        - fechados / valor_fechado: vendas ganhas;
+        - perdidos / valor_perdido: oportunidades perdidas.
+        Vendedores (SDR/CLOSER) ativos aparecem mesmo sem movimento; os demais perfis só aparecem
+        se tiverem algum. Perfis sem visão total recebem só a própria linha.
         """
-        status = func.lower(func.coalesce(Oportunidade.status, ""))
-        ganho = status.in_(STATUS_GANHO)
+        ganho = _STATUS.in_(STATUS_GANHO)
+        perdido = _STATUS.in_(STATUS_PERDIDO)
         etapa = func.lower(func.coalesce(Oportunidade.etapa_funil, ""))
         qualificado = or_(ganho, and_(etapa != "", ~etapa.like("prospec%")))
+        criada = _no_periodo(Oportunidade.created_at, inicio, fim)
+        ganha_no_periodo = and_(ganho, _no_periodo(Oportunidade.fechada_em, inicio, fim))
+        perdida_no_periodo = and_(perdido, _no_periodo(Oportunidade.fechada_em, inicio, fim))
 
-        condicao_join = [Oportunidade.usuario_id == Usuario.id]
-        if inicio:
-            condicao_join.append(Oportunidade.created_at >= inicio)
-        if fim:
-            condicao_join.append(Oportunidade.created_at < fim)
-
-        prospectados = func.count(Oportunidade.id)
+        colunas = {
+            "prospectados": _contar(criada),
+            "valor_prospectado": _somar(criada),
+            "qualificados": _contar(and_(criada, qualificado)),
+            "convertidos": _contar(and_(criada, ganho)),
+            "fechados": _contar(ganha_no_periodo),
+            "valor_fechado": _somar(ganha_no_periodo),
+            "perdidos": _contar(perdida_no_periodo),
+            "valor_perdido": _somar(perdida_no_periodo),
+        }
         stmt = (
-            select(
-                Usuario.id,
-                Usuario.nome,
-                Usuario.perfil,
-                prospectados,
-                func.count(case((qualificado, Oportunidade.id))),
-                func.count(case((ganho, Oportunidade.id))),
-                func.coalesce(func.sum(case((ganho, Oportunidade.valor))), 0),
-            )
-            .outerjoin(Oportunidade, and_(*condicao_join))
+            select(Usuario.id, Usuario.nome, Usuario.perfil, *colunas.values())
+            .outerjoin(Oportunidade, Oportunidade.usuario_id == Usuario.id)
             .where(Usuario.ativo.is_(True))
             .group_by(Usuario.id, Usuario.nome, Usuario.perfil)
-            .having(or_(prospectados > 0, Usuario.perfil.in_(("SDR", "CLOSER"))))
+            .having(
+                or_(
+                    colunas["prospectados"] > 0,
+                    colunas["fechados"] > 0,
+                    colunas["perdidos"] > 0,
+                    Usuario.perfil.in_(("SDR", "CLOSER")),
+                )
+            )
             .order_by(Usuario.nome)
         )
         if not pode_ver_todos_oportunidades(self.usuario):
             stmt = stmt.where(Usuario.id == self.usuario.id)
         rows = (await self.session.execute(stmt)).all()
 
-        vendedores = [
-            {
-                "id": str(uid),
-                "nome": nome,
-                "perfil": perfil,
-                "prospectados": int(n_prosp),
-                "qualificados": int(n_qual),
-                "fechados": int(n_fech),
-                "valor_fechado": float(valor),
-            }
-            for uid, nome, perfil, n_prosp, n_qual, n_fech, valor in rows
-        ]
-        totais = {
-            chave: sum(v[chave] for v in vendedores)
-            for chave in ("prospectados", "qualificados", "fechados", "valor_fechado")
-        }
+        vendedores = []
+        for uid, nome, perfil, *numeros in rows:
+            linha = {"id": str(uid), "nome": nome, "perfil": perfil}
+            for chave, n in zip(colunas, numeros):
+                linha[chave] = float(n) if chave.startswith("valor_") else int(n)
+            vendedores.append(linha)
+        totais = {chave: sum(v[chave] for v in vendedores) for chave in colunas}
         return {"vendedores": vendedores, "totais": totais}
 
-    async def metricas_resumo(self) -> dict:
-        """Contagens agregadas respeitando RF07."""
-        base_leads = select(func.count()).select_from(Lead)
-        base_ops = select(func.count(), func.coalesce(func.sum(Oportunidade.valor), 0))
+    async def metricas_resumo(self, *, inicio: datetime | None = None, fim: datetime | None = None) -> dict:
+        """Indicadores do período, respeitando RF07.
+
+        Leads e oportunidades contam pela data de criação; ganhas e perdidas, pela data de
+        fechamento. Sem período, considera tudo.
+        """
+        criada = _no_periodo(Oportunidade.created_at, inicio, fim)
+        ganha = and_(_STATUS.in_(STATUS_GANHO), _no_periodo(Oportunidade.fechada_em, inicio, fim))
+        perdida = and_(_STATUS.in_(STATUS_PERDIDO), _no_periodo(Oportunidade.fechada_em, inicio, fim))
+        aberta = and_(criada, ~_STATUS.in_(STATUS_FECHADO))
+
+        base_leads = select(func.count()).select_from(Lead).where(_no_periodo(Lead.created_at, inicio, fim))
+        base_ops = select(
+            _contar(criada), _somar(criada), _contar(aberta), _somar(aberta),
+            _contar(ganha), _somar(ganha), _contar(perdida), _somar(perdida),
+        )
         if not pode_ver_todos_oportunidades(self.usuario):
             base_leads = base_leads.where(Lead.usuario_id == self.usuario.id)
             base_ops = base_ops.where(Oportunidade.usuario_id == self.usuario.id)
         n_leads = (await self.session.execute(base_leads)).scalar_one()
-        n_ops, valor_total = (await self.session.execute(base_ops)).one()
+        n_ops, valor_total, n_abertas, valor_abertas, n_ganhas, valor_ganhas, n_perdidas, valor_perdidas = (
+            await self.session.execute(base_ops)
+        ).one()
         return {
             "total_leads": int(n_leads),
             "total_oportunidades": int(n_ops),
             "valor_total_oportunidades": float(valor_total),
+            "abertas": {"quantidade": int(n_abertas), "valor": float(valor_abertas)},
+            "ganhas": {"quantidade": int(n_ganhas), "valor": float(valor_ganhas)},
+            "perdidas": {"quantidade": int(n_perdidas), "valor": float(valor_perdidas)},
         }

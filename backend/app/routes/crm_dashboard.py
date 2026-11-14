@@ -60,13 +60,18 @@ async def vendedores(
     return [{"id": str(u.id), "nome": u.nome} for u in rows]
 
 
-@router.get("/metricas", summary="Resumo numérico (RF07)")
+@router.get("/metricas", summary="Indicadores do período: leads, oportunidades, ganhas e perdidas (RF07)")
 async def metricas(
     session: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[Usuario, Depends(get_current_user)],
+    inicio: Annotated[datetime | None, Query(description="A partir deste instante (ISO 8601, inclusive)")] = None,
+    fim: Annotated[datetime | None, Query(description="Antes deste instante (ISO 8601)")] = None,
 ):
+    """Leads e oportunidades pela data de criação; ganhas e perdidas pela data de fechamento."""
+    if inicio and fim and inicio >= fim:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Início do período deve ser antes do fim")
     repo = OportunidadeRepository(session, user)
-    return await repo.metricas_resumo()
+    return await repo.metricas_resumo(inicio=inicio, fim=fim)
 
 
 @router.get("/sincronizacoes", summary="Últimas sincronizações recebidas do RD Station")

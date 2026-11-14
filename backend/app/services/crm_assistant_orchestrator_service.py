@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 from uuid import UUID, uuid4
 
 import anthropic
@@ -7,13 +6,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.agents.crm_tools import TOOLS, executar_ferramenta
+from app.core.agents.crm_tools import TOOLS, executar_ferramenta, hoje_brt
 from app.core.agents.intent_router_crm import classify_intent
 from app.db.models import ConversaChatbot, Mensagem, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
 from app.domain.repositories.crm import OportunidadeRepository
 
 logger = logging.getLogger(__name__)
+
+_DIAS_SEMANA = ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo")
+
+
+def _hoje_por_extenso() -> str:
+    """Data no horário de Brasília, com o dia da semana (o modelo calcula períodos a partir dela)."""
+    hoje = hoje_brt()
+    return f"{_DIAS_SEMANA[hoje.weekday()]}, {hoje:%d/%m/%Y}"
 
 # Mensagens anteriores da conversa enviadas ao modelo como contexto.
 MAX_HISTORICO = 20
@@ -96,11 +103,20 @@ class CrmAssistantOrchestratorService:
             "explique números de forma clara, sem jargão técnico.\n\n"
             f"Usuário atual: {self.usuario.nome}, perfil {PERFIL_LABEL.get(self.usuario.perfil, self.usuario.perfil)}. "
             f"{visao}\n"
-            f"Data de hoje: {datetime.now().strftime('%d/%m/%Y')}.\n\n"
+            f"Data de hoje: {_hoje_por_extenso()}.\n\n"
             "Os dados vêm do banco sincronizado com o RD Station e só estão disponíveis pelas "
             "ferramentas: consulte-as antes de responder sobre números, leads ou oportunidades. "
             "Nunca invente valores, nomes ou métricas; se algo não estiver nos dados, diga que a "
-            "informação não está disponível. Escreva valores como R$ 45.000.\n\n"
+            "informação não está disponível. Escreva valores como R$ 45.000.\n\n"            "Situação das oportunidades: 'ongoing' é em andamento e 'paused' é pausada (as duas "
+            "estão em aberto); 'won' é ganha (venda fechada) e 'lost' é perdida. Nunca chame de "
+            "abertas as oportunidades ganhas ou perdidas, nem some o valor delas ao funil em aberto.\n\n"
+            "Períodos: vendas ganhas e perdidas contam pela data de fechamento; oportunidades em "
+            "aberto e leads novos, pela data de criação. Quando o usuário informar um período "
+            "(um mês, 'este ano', 'últimos 30 dias', datas), converta para datas e consulte só "
+            "esse período. Quando perguntar sobre vendas ou desempenho sem dizer o período, use o "
+            "mês atual e deixe claro na resposta que os números são do mês atual. Ao comparar "
+            "vendedores, analise por valor e por quantidade de oportunidades.\n\n"
+
             "Os vendedores registram anotações diárias sobre os clientes (ligações, reuniões, "
             "visitas, combinados e próximos retornos). Use-as para contextualizar respostas sobre "
             "um cliente, resumir o andamento de uma negociação e montar a agenda de contatos.\n\n"

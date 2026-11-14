@@ -1,15 +1,21 @@
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, event, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+# Status de oportunidade encerrada (o RD Station CRM usa "won"/"lost"; aceitamos variações em português).
+STATUS_GANHO = ("won", "ganho", "ganha")
+STATUS_PERDIDO = ("lost", "perdido", "perdida")
+STATUS_FECHADO = STATUS_GANHO + STATUS_PERDIDO
 
 
 class PerfilUsuario(str, enum.Enum):
@@ -79,6 +85,9 @@ class Oportunidade(Base):
     rd_stage_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     valor: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     status: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Quando foi ganha ou perdida (vazio enquanto está em aberto). Relatórios de vendas por
+    # período usam esta data; oportunidades em aberto usam created_at.
+    fechada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     dados_extras: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -88,6 +97,25 @@ class Oportunidade(Base):
     lead: Mapped["Lead | None"] = relationship(back_populates="oportunidades")
     usuario: Mapped["Usuario | None"] = relationship(back_populates="oportunidades")
     interacoes: Mapped[list["Interacao"]] = relationship(back_populates="oportunidade")
+
+
+def _fechado(status: Any) -> str | None:
+    """"won"/"lost" normalizado se o status é de oportunidade encerrada; senão None."""
+    s = status.lower() if isinstance(status, str) else ""
+    return "won" if s in STATUS_GANHO else "lost" if s in STATUS_PERDIDO else None
+
+
+@event.listens_for(Oportunidade.status, "set")
+def _registrar_fechamento(op: Oportunidade, novo: Any, antigo: Any, _initiator: Any) -> None:
+    """Mantém fechada_em: marca agora ao ganhar/perder (por tela, webhook ou script) e limpa ao reabrir.
+
+    Repetir o mesmo status (o webhook do RD reenvia "won" a cada alteração) não muda a data.
+    Para gravar outra data, atribua fechada_em depois do status.
+    """
+    if _fechado(novo) is None:
+        op.fechada_em = None
+    elif _fechado(novo) != _fechado(antigo) or op.fechada_em is None:
+        op.fechada_em = datetime.now(UTC)
 
 
 class Interacao(Base):
