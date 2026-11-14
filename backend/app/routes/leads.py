@@ -37,6 +37,8 @@ class LeadResumo(BaseModel):
     responsavel: Pessoa | None
     oportunidades: int
     sincronizado: bool
+    # Id do contato no RD Station CRM (monta o link para a página dele no RD).
+    rd_lead_id: str | None
     updated_at: datetime
 
 
@@ -55,6 +57,8 @@ class LeadDetalhe(BaseModel):
     telefone: str | None
     responsavel: Pessoa | None
     sincronizado: bool
+    # Id do contato no RD Station CRM (monta o link para a página dele no RD).
+    rd_lead_id: str | None
     oportunidades: list[OportunidadeDoLead]
     created_at: datetime
     updated_at: datetime
@@ -87,6 +91,7 @@ def _detalhe(lead: Lead) -> LeadDetalhe:
         telefone=lead.telefone,
         responsavel=Pessoa(id=lead.usuario.id, nome=lead.usuario.nome) if lead.usuario else None,
         sincronizado=lead.rd_lead_id is not None,
+        rd_lead_id=lead.rd_lead_id,
         oportunidades=[
             OportunidadeDoLead(
                 id=op.id,
@@ -145,6 +150,7 @@ async def listar(
             responsavel=Pessoa(id=lead.usuario.id, nome=lead.usuario.nome) if lead.usuario else None,
             oportunidades=int(n),
             sincronizado=lead.rd_lead_id is not None,
+            rd_lead_id=lead.rd_lead_id,
             updated_at=lead.updated_at,
         )
         for lead, n in linhas
