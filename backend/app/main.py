@@ -15,9 +15,11 @@ from app.routes import (
     crm_dashboard,
     health,
     integracao_rd,
+    oportunidades,
     usuarios,
     webhooks_rd,
 )
+from app.services.admin_inicial import garantir_admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +42,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Alembic upgrade falhou — verifique POSTGRES_URL e o banco")
             raise
+    try:
+        await garantir_admin()
+    except Exception:
+        # Sem o admin a API ainda atende; o erro fica no log para corrigir as variáveis/banco.
+        logger.exception("Não foi possível garantir o administrador de ADMIN_EMAIL")
     yield
 
 
@@ -66,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks_rd.router)
     app.include_router(chat_crm.router)
     app.include_router(crm_dashboard.router)
+    app.include_router(oportunidades.router)
     return app
 
 

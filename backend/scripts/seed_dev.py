@@ -7,8 +7,8 @@ Pode ser executado várias vezes: usuários e registros já existentes são mant
 Uso (dentro de backend/, com o .venv ativo):
     python -m scripts.seed_dev
 
-Credenciais de desenvolvimento criadas (NÃO use em produção):
-    admin@crmassist.dev    / admin     -> perfil ADMIN   (criado pela migração 003; o seed não o altera)
+Credenciais de desenvolvimento criadas (NÃO use em produção). O administrador vem de
+ADMIN_EMAIL / ADMIN_PASSWORD (ver README), não deste script:
     gerente@crmassist.dev  / demo1234  -> perfil GERENTE (vê todo o time)
     sdr@crmassist.dev      / demo1234  -> perfil SDR     (vê só a própria carteira)
     closer@crmassist.dev   / demo1234  -> perfil CLOSER  (vê só a própria carteira)
@@ -26,7 +26,6 @@ from app.security import hash_password
 SENHA_DEMO = "demo1234"
 
 USUARIOS = [
-    ("admin@crmassist.dev", "Administrador", "ADMIN"),
     ("gerente@crmassist.dev", "Rafael Andrade", "GERENTE"),
     ("sdr@crmassist.dev", "Carlos Eduardo Mendes", "SDR"),
     ("closer@crmassist.dev", "Tatiane Rocha", "CLOSER"),
@@ -79,7 +78,7 @@ async def main() -> None:
                 nome=empresa,
                 etapa_funil=etapa,
                 valor=valor,
-                status="open",
+                status="ongoing",
                 dados_extras=None,
                 lead_id=lead.id,
                 usuario_id=responsavel,

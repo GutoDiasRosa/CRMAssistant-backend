@@ -27,12 +27,15 @@ def _to_response(u: Usuario) -> UsuarioResponse:
     return UsuarioResponse(id=str(u.id), email=u.email, nome=u.nome, perfil=u.perfil)
 
 
-@router.get("", response_model=list[UsuarioResponse], summary="Lista os usuários (admin)")
+@router.get("", response_model=list[UsuarioResponse], summary="Lista os usuários ativos (admin)")
 async def listar(
     session: Annotated[AsyncSession, Depends(get_session)],
     _: Annotated[Usuario, Depends(get_current_admin)],
 ):
-    rows = (await session.execute(select(Usuario).order_by(Usuario.nome))).scalars().all()
+    # Inativos (ex.: o admin padrão antigo, desativado na inicialização) não entram nem fazem login.
+    rows = (
+        await session.execute(select(Usuario).where(Usuario.ativo.is_(True)).order_by(Usuario.nome))
+    ).scalars().all()
     return [_to_response(u) for u in rows]
 
 

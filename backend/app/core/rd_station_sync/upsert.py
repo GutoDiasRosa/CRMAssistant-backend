@@ -56,12 +56,14 @@ async def upsert_oportunidade(
     dados_extras: dict[str, Any] | None,
     lead_id: UUID | None = None,
     usuario_id: UUID | None = None,
+    rd_stage_id: str | None = None,
 ) -> Oportunidade:
     stmt = select(Oportunidade).where(Oportunidade.rd_deal_id == rd_deal_id)
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row:
         row.nome = nome or row.nome
         row.etapa_funil = etapa_funil if etapa_funil is not None else row.etapa_funil
+        row.rd_stage_id = rd_stage_id if rd_stage_id is not None else row.rd_stage_id
         row.valor = valor if valor is not None else row.valor
         row.status = status if status is not None else row.status
         row.dados_extras = dados_extras if dados_extras is not None else row.dados_extras
@@ -78,6 +80,7 @@ async def upsert_oportunidade(
         usuario_id=usuario_id,
         nome=nome,
         etapa_funil=etapa_funil,
+        rd_stage_id=rd_stage_id,
         valor=valor,
         status=status,
         dados_extras=dados_extras,

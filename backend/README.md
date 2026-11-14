@@ -38,7 +38,7 @@ O CRM Assist remove esse gargalo: cada pessoa do time consulta os dados do CRM *
 |---|---|---|
 | **RF01** | Autenticação por e-mail e senha (JWT) | `routes/auth.py`, `security.py` |
 | **RF02** | Integração com o RD Station via OAuth 2.0 | `routes/integracao_rd.py` |
-| **RF03** | Sincronização automática de leads e oportunidades por webhook | `routes/webhooks_rd.py`, `core/rd_station_sync/` |
+| **RF03** | Sincronização de leads e oportunidades nos dois sentidos: webhook do RD → CRM Assist e envio CRM Assist → RD | `routes/webhooks_rd.py`, `routes/oportunidades.py`, `core/rd_station_sync/` |
 | **RF04** | Funil de vendas em formato kanban | `GET /api/crm/kanban` |
 | **RF05** | Chatbot em linguagem natural (texto) | `POST /chat`, `services/crm_assistant_orchestrator_service.py` |
 | **RF06** | Resumo de leads, indicadores, performance do time e relatórios por período | Ferramentas do chat em `core/agents/crm_tools.py` |
@@ -100,11 +100,23 @@ A API é organizada em camadas com responsabilidades separadas: rotas enxutas, u
 
 ### Fluxo da sincronização (`POST /webhooks/rd-station`)
 
-1. O RD Station envia um evento de conversão ou atualização.
-2. A API valida o segredo compartilhado (`X-Webhook-Secret`) e, quando presente, a assinatura HMAC-SHA256 (`X-RD-Signature`).
+A integração usa a **API v2 do RD Station CRM** (`https://api.rd.services/crm/v2`), com um aplicativo próprio do CRM na RD Station App Store.
+
+0. Ao concluir a autorização OAuth na tela **Integração RD**, a própria API cria no RD Station CRM os webhooks `crm_deal_created`, `crm_deal_updated`, `crm_deal_deleted`, `crm_contact_created` e `crm_contact_updated` apontando para esta rota, com um token secreto na URL (`?token=...`).
+1. O RD Station CRM envia o evento (`event_name` + `document`).
+2. A API confere o token da URL; sem ele (ou com um token antigo), responde 401.
 3. A requisição é respondida na hora com **202 Accepted**. O processamento acontece em segundo plano, o que evita *timeout* no RD Station.
-4. O payload é normalizado e os registros são gravados com **upsert** pelos IDs do RD (`rd_lead_id`, `rd_deal_id`). Assim, um mesmo evento reenviado não gera duplicatas (idempotência).
+4. O payload é normalizado e os registros são gravados com **upsert** pelos IDs do RD (`rd_lead_id` = contato, `rd_deal_id` = negociação). Assim, um mesmo evento reenviado não gera duplicatas (idempotência). Negociação excluída no RD é excluída aqui. Como o webhook de negociação não traz os contatos, a API busca o primeiro contato da negociação para ligá-la ao lead.
 5. Cada execução fica registrada na tabela `sincronizacao` (sucesso, ignorado ou erro) para auditoria.
+
+### Fluxo do envio (`POST/PUT /api/crm/oportunidades`)
+
+1. A oportunidade criada ou editada no CRM Assist é gravada primeiro no banco local.
+2. Com o RD conectado e a integração ativa, a API cria ou atualiza o contato (`/contacts`) e a negociação (`/deals`) no RD Station CRM, com etapa (`stage_id`), valor (`one_time_price`), status e responsável (usuário do RD com o mesmo e-mail).
+3. Os ids devolvidos pelo RD são gravados no registro local. Se o webhook do próprio RD chegar antes e criar uma cópia, as duas são unidas.
+4. Se o RD recusar, a oportunidade continua salva, a tela mostra o motivo e a falha fica em `sincronizacao` (fonte `envio_rd`). Salvar de novo tenta outra vez.
+
+O token do RD Station CRM dura 2 horas e cada renovação troca também o `refresh_token`; a renovação é feita com a linha do token travada, para que duas requisições simultâneas não invalidem uma à outra.
 
 ---
 
@@ -115,7 +127,7 @@ A migração inicial está em `alembic/versions/001_initial_schema.py`.
 | Tabela | Finalidade |
 |---|---|
 | `usuario` | Membros da equipe, com perfil (`SDR`, `CLOSER`, `GERENTE`, `DIRETOR`, `ANALISTA`, `ADMIN`) |
-| `leads` | Leads sincronizados do RD Station, vinculados ao vendedor responsável |
+| `leads` | Leads (contatos do RD Station CRM), vinculados ao vendedor responsável |
 | `oportunidade` | Negociações, com etapa do funil, valor e status |
 | `interacao` | Histórico de contatos e anotações de uma oportunidade |
 | `conversa_chatbot` | Conversas do usuário com o assistente |
@@ -123,7 +135,7 @@ A migração inicial está em `alembic/versions/001_initial_schema.py`.
 | `relatorio` | Relatórios gerados (parâmetros e resultado em JSON) |
 | `sincronizacao` | Log de cada evento recebido do RD Station |
 | `rd_station_token` | Tokens OAuth do RD Station |
-| `rd_station_config` | Client ID e Client Secret cadastrados pela tela de integração |
+| `rd_station_config` | Configuração cadastrada pela tela de integração: Client ID/Secret, usuário responsável, token e webhooks criados no RD |
 
 ```
 usuario 1───* leads 1───* oportunidade 1───* interacao
@@ -194,13 +206,15 @@ pip install -r requirements.txt
 copy .env.example .env          # Windows  (cp no Linux/macOS)
 ```
 
-Ajuste `POSTGRES_URL` e `JWT_SECRET` no `.env` e inicie a API:
+Ajuste `POSTGRES_URL`, `JWT_SECRET`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` no `.env` e inicie a API:
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-Ao criar o banco, as migrações já cadastram o administrador padrão **`admin@crmassist.dev` / `admin`** (migração `003_admin_padrao`; se o e-mail já existir, nada é alterado).
+O administrador vem das variáveis **`ADMIN_EMAIL`** e **`ADMIN_PASSWORD`** (mínimo 6 caracteres). A cada inicialização a API cria esse usuário ou, se ele já existir, garante o perfil `ADMIN`, a conta ativa e a senha da variável. Sem as duas variáveis, nenhum administrador é criado (aparece um aviso no log).
+
+> Bancos criados antes dessa mudança têm o admin antigo `admin@crmassist.dev` com a senha `admin`. Se `ADMIN_EMAIL` for outro e-mail, esse admin antigo é desativado automaticamente enquanto ainda tiver a senha `admin`.
 
 Para ter outros usuários e dados de exemplo, rode o script de demonstração. As credenciais estão no início do arquivo `scripts/seed_dev.py`:
 
@@ -227,15 +241,11 @@ O arquivo [`render.yaml`](../render.yaml) é um *Blueprint* do Render que cria o
 Cada `git push` na `main` gera um novo deploy do serviço correspondente. As migrações rodam sozinhas quando a API sobe.
 
 1. No [Neon](https://neon.com), crie um projeto na região **AWS US East (N. Virginia)** e copie a *connection string* **direta** (sem `-pooler` no host).
-2. No [Render](https://render.com), conecte o GitHub com acesso aos dois repositórios e crie um *Blueprint* a partir deste repositório. Na criação, informe `POSTGRES_URL` (a string do Neon); `RD_WEBHOOK_SECRET` e `ANTHROPIC_API_KEY` podem ficar vazios por enquanto.
+2. No [Render](https://render.com), conecte o GitHub com acesso aos dois repositórios e crie um *Blueprint* a partir deste repositório. Na criação, informe `POSTGRES_URL` (a string do Neon), `ADMIN_EMAIL` e `ADMIN_PASSWORD`; `ANTHROPIC_API_KEY` pode ficar vazia por enquanto.
 3. Confira as URLs geradas. Se o Render acrescentou um sufixo aos nomes, ajuste `FRONTEND_URL`/`CORS_ORIGINS` na API e `VITE_API_URL` no front.
-4. As migrações criam o administrador padrão `admin@crmassist.dev` / `admin`. **Troque essa senha logo após o primeiro deploy**, por exemplo redefinindo-a a partir da sua máquina, apontando para o banco do Neon (o plano grátis do Render não tem console):
-   ```powershell
-   $env:POSTGRES_URL = "<connection string do Neon>"
-   python -m scripts.criar_admin admin@crmassist.dev "Administrador"
-   ```
+4. Entre com `ADMIN_EMAIL` / `ADMIN_PASSWORD`. Para trocar o e-mail ou a senha do administrador, altere as variáveis em **Environment** no painel do Render e faça um novo deploy (o serviço reinicia e aplica os valores). Trocar o e-mail cria um novo administrador; o anterior continua existindo.
 5. No plano grátis a API hiberna após 15 minutos sem acesso e leva cerca de 1 minuto para voltar. Para receber webhooks sem atraso, agende no [cron-job.org](https://cron-job.org) (grátis) um `GET https://crmassistant-api.onrender.com/health` a cada 10 minutos.
-6. Entre no sistema e abra **Integração RD**. As URLs de callback e de webhook exibidas ali já são as públicas; cadastre-as no aplicativo do RD Station.
+6. Entre no sistema e abra **Integração RD**. Crie um aplicativo para o **RD Station CRM** na App Store do RD (credenciais do RD Station Marketing não servem) e cadastre nele a URL de callback exibida na tela, que já é a pública. O webhook é criado sozinho ao final da autorização. A API do CRM exige o plano Basic, Pro ou Advanced do RD Station CRM.
 
 > Não rode o `seed_dev` em produção: as senhas de demonstração estão publicadas neste README.
 
@@ -251,15 +261,13 @@ Cada `git push` na `main` gera um novo deploy do serviço correspondente. As mig
 | `ANTHROPIC_API_KEY` | Não | — | Chave da API do Claude. Sem ela, o chat usa respostas de *fallback* |
 | `ANTHROPIC_MODEL` | Não | `claude-opus-5` | Modelo usado pelo assistente |
 | `ANTHROPIC_EFFORT` | Não | `low` | Nível de esforço do modelo (`low`, `medium`, `high`...). `low` mantém o chat rápido |
-| `RD_CLIENT_ID` | Não | — | Client ID do app no RD Station (reserva; o normal é cadastrar pela tela Integração RD) |
-| `RD_CLIENT_SECRET` | Não | — | Client secret do app no RD Station (reserva, idem) |
-| `RD_REDIRECT_URI` | Não | `API_PUBLIC_URL` + `/oauth/rd/callback` | URL de retorno do OAuth |
-| `RD_OAUTH_AUTHORIZE_URL` | Não | `https://api.rd.services/auth/dialog` | Endpoint de autorização do RD |
-| `RD_OAUTH_TOKEN_URL` | Não | `https://api.rd.services/auth/token` | Endpoint de token do RD |
+| `ADMIN_EMAIL` | Sim | — | E-mail do administrador, aplicado a cada inicialização da API |
+| `ADMIN_PASSWORD` | Sim | — | Senha do administrador (mínimo 6 caracteres), aplicada a cada inicialização da API |
 | `FRONTEND_URL` | Não | `http://localhost:5173` | Front-end para onde o callback OAuth devolve o usuário |
 | `API_PUBLIC_URL` | Não | `RENDER_EXTERNAL_URL` | Endereço público da API, usado nas URLs de webhook e callback. No Render é preenchido sozinho |
-| `RD_WEBHOOK_SECRET` | Recomendada | — | Segredo do webhook. **Se ficar vazia, o webhook aceita qualquer chamada (use só em desenvolvimento)** |
 | `SKIP_ALEMBIC_ON_STARTUP` | Não | — | `1` para não rodar as migrações ao iniciar (usado nos testes) |
+
+As credenciais do RD Station (Client ID e Client Secret) não usam variáveis de ambiente: são cadastradas pela tela **Integração RD** e guardadas na tabela `rd_station_config`.
 
 ---
 
@@ -279,13 +287,20 @@ Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. 
 | GET | `/api/crm/kanban` 🔒 | Oportunidades agrupadas por etapa do funil |
 | GET | `/api/crm/metricas` 🔒 | Totais e valor somado de leads e oportunidades |
 | GET | `/api/crm/sincronizacoes` 🔒 | Últimas sincronizações recebidas do RD Station |
-| GET | `/oauth/rd/conexao` 🔒 admin | Status, credenciais (sem o secret), URLs de callback e webhook |
+| GET | `/api/crm/etapas` 🔒 | Funis e etapas do RD Station CRM (ou, sem RD, as etapas já usadas no CRM Assist) |
+| GET | `/api/crm/oportunidades/{id}` 🔒 | Detalhe da oportunidade, com contato, responsável e interações (RF07) |
+| POST | `/api/crm/oportunidades` 🔒 | Cria uma oportunidade e a envia ao RD Station CRM |
+| PUT | `/api/crm/oportunidades/{id}` 🔒 | Atualiza uma oportunidade e envia a alteração ao RD Station CRM |
+| GET | `/oauth/rd/conexao` 🔒 admin | Status, credenciais (sem o secret), URL de callback e webhooks criados |
+| PUT | `/oauth/rd/configuracao` 🔒 admin | Ativa/desativa a integração e define o usuário responsável |
 | PUT | `/oauth/rd/credenciais` 🔒 admin | Salva Client ID e Client Secret do app RD Station |
 | POST | `/oauth/rd/authorize-url` 🔒 admin | Gera a URL de autorização do RD com `state` assinado |
-| GET | `/oauth/rd/callback` | Recebe o `code` do RD, armazena os tokens e volta para `FRONTEND_URL/integracao-rd` |
-| DELETE | `/oauth/rd/conexao` 🔒 admin | Desconecta o RD Station (apaga os tokens) |
+| GET | `/oauth/rd/callback` | Recebe o `code` do RD, armazena os tokens, cria os webhooks no RD e volta para `FRONTEND_URL/integracao-rd` |
+| POST | `/oauth/rd/webhook` 🔒 admin | Cria (ou recria) os webhooks no RD Station |
+| POST | `/oauth/rd/testar` 🔒 admin | Testa a conexão criando (ou atualizando) um contato de teste (`teste.crmassist@example.com`) no RD Station CRM |
+| DELETE | `/oauth/rd/conexao` 🔒 admin | Desconecta o RD Station (remove os webhooks e apaga os tokens) |
 | GET | `/oauth/rd/status` 🔒 | Indica se o RD Station já está conectado |
-| POST | `/webhooks/rd-station` | Recebe eventos de leads e oportunidades do RD Station |
+| POST | `/webhooks/rd-station` | Recebe eventos de negociações e contatos do RD Station CRM |
 
 ### Exemplos
 
@@ -335,7 +350,7 @@ Envie o `sessionId` retornado nas mensagens seguintes para continuar a mesma con
 
 **Webhook do RD Station**
 
-No RD Station, configure a URL pública `https://<seu-dominio>/webhooks/rd-station` e envie o mesmo valor de `RD_WEBHOOK_SECRET` no header `X-Webhook-Secret`. O payload aceito é um objeto JSON com `lead` e/ou `deal`, diretamente ou dentro de `data`. O mapeamento dos campos está em `app/core/rd_station_sync/normalize.py`.
+Não há cadastro manual: ao concluir a autorização, a API cria os webhooks pela API do RD Station CRM (`POST https://api.rd.services/crm/v2/webhooks`) com a URL `https://<seu-dominio>/webhooks/rd-station?token=<token>`. O RD só alcança endereços públicos, então em desenvolvimento local o webhook não é criado (a tela explica o motivo). O payload é o envelope do RD Station CRM: `{"event_name": "crm_deal_updated", "document": {...}}`. O mapeamento dos campos está em `app/core/rd_station_sync/normalize.py`.
 
 ---
 
@@ -369,7 +384,8 @@ backend/
 │   │       ├── normalize.py           #   extrai e mapeia campos do payload
 │   │       ├── process.py             #   fluxo de processamento do evento
 │   │       ├── upsert.py              #   gravação idempotente + log
-│   │       └── webhook_auth.py        #   validação de segredo e assinatura
+│   │       ├── integracao.py          #   OAuth, token e webhooks na API do RD Station CRM
+│   │       └── envio.py               #   envio de contatos e negociações para o RD
 │   ├── db/
 │   │   ├── database.py         # Engine e sessão assíncronas
 │   │   └── models.py           # Modelos SQLAlchemy (DER)
@@ -414,8 +430,9 @@ SKIP_ALEMBIC_ON_STARTUP=1 python -m pytest -q
 
 - Autenticação JWT com perfis e exclusão de dados (LGPD)
 - Modelo de dados completo com migração Alembic
-- Webhook do RD Station com validação, processamento assíncrono, idempotência e log
-- Fluxo OAuth 2.0 com o RD Station e armazenamento de tokens
+- Webhook do RD Station criado automaticamente, com token, processamento assíncrono, idempotência e log
+- Fluxo OAuth 2.0 com o RD Station CRM, com renovação automática do token
+- Criação e edição de oportunidades no CRM Assist, enviadas ao RD Station CRM
 - Endpoints de kanban e métricas com filtro por perfil
 - Chat com histórico de conversas, classificação de intenção e resposta via Claude
 
@@ -425,7 +442,6 @@ SKIP_ALEMBIC_ON_STARTUP=1 python -m pytest -q
 - [ ] Recuperação de senha (RF01)
 - [ ] Gráficos de indicadores gerados pelo chat (RF06)
 - [ ] Relatório de vendas por período no chat (RF06), que depende de datas de fechamento vindas do RD Station
-- [ ] Renovação automática do token OAuth (refresh token)
 - [ ] Sincronização periódica como alternativa ao webhook (RNF de até 5 minutos)
 - [ ] Ampliar a cobertura de testes
 

@@ -74,6 +74,8 @@ class Oportunidade(Base):
     )
     nome: Mapped[str] = mapped_column(String(512), default="")
     etapa_funil: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Etapa correspondente no funil do RD Station CRM (usada ao enviar a negociação para lá).
+    rd_stage_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     valor: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
     status: Mapped[str | None] = mapped_column(String(128), nullable=True)
     dados_extras: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -190,11 +192,12 @@ class RdStationConfig(Base):
     usuario_integracao_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuario.id", ondelete="SET NULL"), nullable=True
     )
-    # Tokens da API legada (RD Station > Integrações > Dados de integração).
-    token_publico: Mapped[str | None] = mapped_column(Text, nullable=True)
-    token_privado: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Vai na URL do webhook (?token=...): o RD Station não envia cabeçalhos personalizados.
+    # Vai na URL do webhook (?token=...) e autentica as chamadas do RD Station.
     webhook_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Webhooks que o próprio CRM Assist criou no RD Station: [{"uuid": ..., "event_type": ...}].
+    webhooks: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # Motivo da última falha ao criar os webhooks (limpo quando a criação dá certo).
+    webhook_erro: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

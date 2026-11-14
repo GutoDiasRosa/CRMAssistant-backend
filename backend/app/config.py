@@ -19,24 +19,19 @@ class Settings(BaseSettings):
 
     cors_origins: str = "*"
 
-    # RD Station OAuth (documentação RD: ajuste URLs se a API do seu produto diferir)
-    rd_client_id: str = ""
-    rd_client_secret: str = ""
-    # Sem valor explícito, é montada a partir de API_PUBLIC_URL (ver _derivar_urls)
-    rd_redirect_uri: str = "http://localhost:8000/oauth/rd/callback"
-    rd_oauth_authorize_url: str = "https://api.rd.services/auth/dialog"
-    rd_oauth_token_url: str = "https://api.rd.services/auth/token"
-    rd_api_url: str = "https://api.rd.services"
-    # Tela do front-end para onde o callback OAuth devolve o usuário
+    # Tela do front-end para onde o callback OAuth do RD Station devolve o usuário
     frontend_url: str = "http://localhost:5173"
-    # Endereço público da API. No Render vem sozinho de RENDER_EXTERNAL_URL.
-    # Vazio = usa o endereço da própria requisição (desenvolvimento local).
+    # Endereço público da API (URLs de callback e de webhook do RD Station).
+    # No Render vem sozinho de RENDER_EXTERNAL_URL. Vazio = usa o endereço da própria
+    # requisição (desenvolvimento local).
     api_public_url: str = Field(
         default="", validation_alias=AliasChoices("API_PUBLIC_URL", "RENDER_EXTERNAL_URL")
     )
 
-    # Webhook: segredo compartilhado ou validação adicional conforme doc RD
-    rd_webhook_secret: str = ""
+    # Administrador criado (ou com a senha redefinida) a cada inicialização da API.
+    # Credenciais do RD Station não vêm do ambiente: são cadastradas pela tela Integração RD.
+    admin_email: str = ""
+    admin_password: str = ""
 
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-5"
@@ -48,8 +43,6 @@ class Settings(BaseSettings):
     def _derivar_urls(self) -> "Settings":
         self.api_public_url = self.api_public_url.rstrip("/")
         self.frontend_url = self.frontend_url.rstrip("/")
-        if "rd_redirect_uri" not in self.model_fields_set and self.api_public_url:
-            self.rd_redirect_uri = f"{self.api_public_url}/oauth/rd/callback"
         return self
 
     def database_url(self, driver: str) -> str:

@@ -1,83 +1,25 @@
-"""
-Normaliza payloads do RD Station.
-A API real pode variar — aceitamos chaves comuns e aninhamento genérico (`data`, `payload`).
+"""Normaliza os webhooks do RD Station CRM.
+
+Envelope: {"event_name": "crm_deal_updated", "event_timestamp": ..., "transaction_uuid": ...,
+"document": {...}}. Negociações chegam no formato DealV1 (deal_stage, user, amount_total);
+contatos, com emails/phones em listas.
 """
 
 from typing import Any
 
 
-def _pick(d: dict[str, Any], *keys: str) -> Any:
-    for k in keys:
-        if k in d and d[k] is not None:
-            return d[k]
-    return None
+def nome_evento(body: dict[str, Any]) -> str | None:
+    """Ex.: "crm_deal_created", "crm_contact_updated"."""
+    valor = body.get("event_name") or body.get("event_type")
+    return str(valor) if valor else None
 
 
-def extract_event_type(body: dict[str, Any]) -> str | None:
-    """Ex.: "WEBHOOK.CONVERTED" ou "WEBHOOK.MARKED_OPPORTUNITY" (RD Station Marketing)."""
-    data = body.get("data")
-    return _pick(body, "event_type", "eventType", "type") or (
-        _pick(data, "event_type", "eventType", "type") if isinstance(data, dict) else None
-    )
-
-
-def extract_lead_dict(body: dict[str, Any]) -> dict[str, Any] | None:
-    for key in ("lead", "Lead"):
-        v = body.get(key)
-        if isinstance(v, dict):
-            return v
-    data = body.get("data")
-    if isinstance(data, dict):
-        for key in ("lead", "Lead"):
-            v = data.get(key)
-            if isinstance(v, dict):
-                return v
-    if body.get("uuid") and (_pick(body, "email") or _pick(body, "name", "nome")):
-        return body
-    return None
-
-
-def extract_lead_dicts(body: dict[str, Any]) -> list[dict[str, Any]]:
-    """Todos os leads/contatos do evento.
-
-    - Webhook atual do RD Station Marketing: `{"event_type": ..., "contact": {...}}`;
-    - webhook legado (tela antiga de Integrações): `{"leads": [{...}, ...]}`.
-    """
-    for origem in (body, body.get("data")):
-        if not isinstance(origem, dict):
-            continue
-        if isinstance(origem.get("contact"), dict):
-            return [origem["contact"]]
-        if isinstance(origem.get("leads"), list):
-            leads = [lead for lead in origem["leads"] if isinstance(lead, dict)]
-            if leads:
-                return leads
-    lead = extract_lead_dict(body)
-    return [lead] if lead else []
-
-
-def extract_deal_dict(body: dict[str, Any]) -> dict[str, Any] | None:
-    for key in ("deal", "Deal", "oportunidade", "opportunity"):
-        v = body.get(key)
-        if isinstance(v, dict):
-            return v
-    data = body.get("data")
-    if isinstance(data, dict):
-        for key in ("deal", "Deal", "oportunidade", "opportunity"):
-            v = data.get(key)
-            if isinstance(v, dict):
-                return v
-    return None
-
-
-def lead_rd_id(lead: dict[str, Any]) -> str | None:
-    rid = _pick(lead, "uuid", "id", "lead_id", "lead_uuid", "_id")
-    return str(rid) if rid is not None else None
-
-
-def deal_rd_id(deal: dict[str, Any]) -> str | None:
-    rid = _pick(deal, "uuid", "id", "deal_id", "opportunity_id", "_id")
-    return str(rid) if rid is not None else None
+def documento(body: dict[str, Any]) -> dict[str, Any] | None:
+    doc = body.get("document")
+    # Alguns eventos embrulham o registro em document.data.
+    if isinstance(doc, dict) and "id" not in doc and isinstance(doc.get("data"), dict):
+        doc = doc["data"]
+    return doc if isinstance(doc, dict) else None
 
 
 def _texto(valor: Any, limite: int) -> str | None:
@@ -87,36 +29,42 @@ def _texto(valor: Any, limite: int) -> str | None:
     return str(valor).strip()[:limite] or None
 
 
-def map_lead_fields(lead: dict[str, Any]) -> dict[str, Any]:
-    # No payload atual, etapa e dono do contato ficam em `funnel` (com include_relations=CONTACT_FUNNEL).
-    funil = lead.get("funnel") if isinstance(lead.get("funnel"), dict) else {}
+def _numero(*valores: Any) -> float | None:
+    for valor in valores:
+        if valor is None:
+            continue
+        try:
+            return float(valor)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _primeiro(lista: Any, chave: str) -> Any:
+    if isinstance(lista, list):
+        for item in lista:
+            if isinstance(item, dict) and item.get(chave):
+                return item[chave]
+    return None
+
+
+def map_negociacao(doc: dict[str, Any]) -> dict[str, Any]:
+    etapa = doc.get("deal_stage") if isinstance(doc.get("deal_stage"), dict) else {}
+    dono = doc.get("user") if isinstance(doc.get("user"), dict) else {}
     return {
-        "rd_lead_id": lead_rd_id(lead),
-        "nome": str(_pick(lead, "name", "nome", "title") or "")[:512],
-        "email": _texto(_pick(lead, "email", "personal_email"), 255),
-        "telefone": _texto(_pick(lead, "mobile_phone", "personal_phone", "phone", "telefone"), 64),
-        "status": _texto(
-            _pick(lead, "status", "lifecycle_stage", "lead_stage") or _pick(funil, "lifecycle_stage"), 128
-        ),
+        "nome": str(doc.get("name") or "")[:512],
+        "etapa_funil": _texto(etapa.get("name"), 255),
+        "rd_stage_id": _texto(etapa.get("id") or doc.get("stage_id"), 32),
+        "valor": _numero(doc.get("amount_total"), doc.get("amount_unique"), doc.get("one_time_price")),
+        "status": _texto(doc.get("status"), 128),
         # E-mail do responsável no RD, usado para achar o usuário correspondente no CRM Assist.
-        "dono_email": _texto(_pick(funil, "contact_owner_email") or _pick(lead, "contact_owner_email"), 255),
-        "dados_extras": lead,
+        "dono_email": _texto(dono.get("email"), 255),
     }
 
 
-def map_deal_fields(deal: dict[str, Any]) -> dict[str, Any]:
-    valor = _pick(deal, "value", "valor", "amount")
-    try:
-        valor_f = float(valor) if valor is not None else None
-    except (TypeError, ValueError):
-        valor_f = None
-    etapa = _pick(deal, "deal_stage", "stage", "etapa_funil", "pipeline_stage")
-    etapa_str = str(etapa)[:255] if etapa is not None else None
+def map_contato(doc: dict[str, Any]) -> dict[str, Any]:
     return {
-        "rd_deal_id": deal_rd_id(deal),
-        "nome": str(_pick(deal, "name", "nome", "title") or "")[:512],
-        "etapa_funil": etapa_str or None,
-        "valor": valor_f,
-        "status": str(_pick(deal, "status") or "")[:128] or None,
-        "dados_extras": deal,
+        "nome": str(doc.get("name") or "")[:512],
+        "email": _texto(_primeiro(doc.get("emails"), "email"), 255),
+        "telefone": _texto(_primeiro(doc.get("phones"), "phone"), 64),
     }

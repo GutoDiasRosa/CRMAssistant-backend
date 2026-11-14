@@ -25,15 +25,18 @@ services:
         sync: false # connection string do Neon (a "direta", sem -pooler)
       - key: JWT_SECRET
         generateValue: true
-      - key: RD_WEBHOOK_SECRET
-        sync: false
+      - key: ADMIN_EMAIL
+        sync: false # e-mail do administrador, aplicado a cada deploy
+      - key: ADMIN_PASSWORD
+        sync: false # senha do administrador (mínimo 6 caracteres), aplicada a cada deploy
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: FRONTEND_URL
         value: https://crmassistant.onrender.com
       - key: CORS_ORIGINS
         value: https://crmassistant.onrender.com
-      # API_PUBLIC_URL e RD_REDIRECT_URI saem de RENDER_EXTERNAL_URL, definida pelo Render.
+      # API_PUBLIC_URL sai de RENDER_EXTERNAL_URL, definida pelo Render. As credenciais do
+      # RD Station são cadastradas pela tela Integração RD, não por variáveis de ambiente.
 
   - type: web
     name: crmassistant

@@ -24,12 +24,8 @@ services:
     environment:
       POSTGRES_URL: postgresql+asyncpg://crm:crm@db:5432/crmassistant
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-use-long-random-string}
-      RD_WEBHOOK_SECRET: ${RD_WEBHOOK_SECRET:-}
-      RD_CLIENT_ID: ${RD_CLIENT_ID:-}
-      RD_CLIENT_SECRET: ${RD_CLIENT_SECRET:-}
-      RD_REDIRECT_URI: ${RD_REDIRECT_URI:-http://localhost:8000/oauth/rd/callback}
-      RD_OAUTH_AUTHORIZE_URL: ${RD_OAUTH_AUTHORIZE_URL:-https://api.rd.services/auth/dialog}
-      RD_OAUTH_TOKEN_URL: ${RD_OAUTH_TOKEN_URL:-https://api.rd.services/auth/token}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@crmassist.dev}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     depends_on:
