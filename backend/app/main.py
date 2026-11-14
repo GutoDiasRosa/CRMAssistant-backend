@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.middleware.request_logging import RequestLoggingMiddleware
 from app.routes import (
+    anotacoes,
     auth,
     chat_crm,
     crm_dashboard,
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(crm_dashboard.router)
     app.include_router(oportunidades.router)
     app.include_router(leads.router)
+    app.include_router(anotacoes.router)
     return app
 
 

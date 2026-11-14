@@ -92,6 +92,8 @@ A API é organizada em camadas com responsabilidades separadas: rotas enxutas, u
    | `listar_oportunidades` | Oportunidades filtradas por etapa e/ou nome |
    | `detalhes_oportunidade` | Uma oportunidade com contato e histórico de interações |
    | `buscar_leads` | Leads por nome ou e-mail e suas oportunidades |
+   | `consultar_anotacoes` | Anotações dos vendedores sobre os clientes (texto, autor, data e retorno) |
+   | `agenda_retornos` | Próximos contatos agendados, incluindo os atrasados |
    | `performance_vendedores` | Quantidade e valor de oportunidades por vendedor |
 
 4. As ferramentas consultam o banco pelos repositórios, que **já filtram pelo perfil do usuário** (RF07). Um SDR não consegue ver dados de outra pessoa nem pedindo pelo chat.
@@ -129,7 +131,7 @@ A migração inicial está em `alembic/versions/001_initial_schema.py`.
 | `usuario` | Membros da equipe, com perfil (`SDR`, `CLOSER`, `GERENTE`, `DIRETOR`, `ANALISTA`, `ADMIN`) |
 | `leads` | Leads (contatos do RD Station CRM), vinculados ao vendedor responsável |
 | `oportunidade` | Negociações, com etapa do funil, valor e status |
-| `interacao` | Histórico de contatos e anotações de uma oportunidade |
+| `interacao` | Anotações dos vendedores (agenda): ligadas a lead e/ou oportunidade, com data do contato e próximo retorno |
 | `conversa_chatbot` | Conversas do usuário com o assistente |
 | `mensagem` | Mensagens de cada conversa (`user` / `assistant`) |
 | `relatorio` | Relatórios gerados (parâmetros e resultado em JSON) |
@@ -291,6 +293,10 @@ Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. 
 | GET | `/api/crm/leads/{id}` 🔒 | Detalhe do lead com as oportunidades dele (RF07) |
 | POST | `/api/crm/leads` 🔒 | Cria um lead e o envia ao RD Station CRM como contato |
 | PUT | `/api/crm/leads/{id}` 🔒 | Atualiza um lead e envia a alteração ao RD Station CRM |
+| GET | `/api/crm/anotacoes` 🔒 | Anotações por lead, oportunidade, período ou autor (RF07) |
+| GET | `/api/crm/anotacoes/retornos` 🔒 | Retornos agendados até uma data (`ate`), incluindo os atrasados |
+| POST | `/api/crm/anotacoes` 🔒 | Registra uma anotação (tipo, texto, data do contato e retorno opcional) |
+| PUT/DELETE | `/api/crm/anotacoes/{id}` 🔒 | Altera ou exclui uma anotação (autor ou admin) |
 | GET | `/api/crm/etapas` 🔒 | Funis e etapas do RD Station CRM (ou, sem RD, as etapas já usadas no CRM Assist) |
 | GET | `/api/crm/oportunidades/{id}` 🔒 | Detalhe da oportunidade, com contato, responsável e interações (RF07) |
 | POST | `/api/crm/oportunidades` 🔒 | Cria uma oportunidade e a envia ao RD Station CRM |

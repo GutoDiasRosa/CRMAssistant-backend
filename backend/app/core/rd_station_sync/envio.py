@@ -8,7 +8,7 @@ import time
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -103,6 +103,7 @@ async def vincular_lead(session: AsyncSession, lead: Lead, rd_id: str) -> None:
         await session.execute(
             update(Oportunidade).where(Oportunidade.lead_id == duplicado.id).values(lead_id=lead.id)
         )
+        await session.execute(update(Interacao).where(Interacao.lead_id == duplicado.id).values(lead_id=lead.id))
         await session.delete(duplicado)
         await session.flush()
     lead.rd_lead_id = rd_id
@@ -117,7 +118,9 @@ async def _vincular_oportunidade(session: AsyncSession, op: Oportunidade, rd_id:
         await session.execute(select(Oportunidade).where(Oportunidade.rd_deal_id == rd_id, Oportunidade.id != op.id))
     ).scalar_one_or_none()
     if duplicada:
-        await session.execute(delete(Interacao).where(Interacao.oportunidade_id == duplicada.id))
+        await session.execute(
+            update(Interacao).where(Interacao.oportunidade_id == duplicada.id).values(oportunidade_id=op.id)
+        )
         await session.delete(duplicada)
         await session.flush()
     op.rd_deal_id = rd_id

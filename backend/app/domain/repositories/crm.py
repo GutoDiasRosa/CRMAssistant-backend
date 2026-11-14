@@ -5,7 +5,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Lead, Oportunidade, Usuario
+from app.db.models import Interacao, Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
 
 # Status de oportunidade ganha (o RD Station CRM usa "won"; aceitamos variações em português).
@@ -115,7 +115,7 @@ class OportunidadeRepository:
         stmt = select(Oportunidade).options(
             selectinload(Oportunidade.lead),
             selectinload(Oportunidade.usuario),
-            selectinload(Oportunidade.interacoes),
+            selectinload(Oportunidade.interacoes).selectinload(Interacao.autor),
         )
         if termo:
             padrao = f"%{termo.strip()}%"

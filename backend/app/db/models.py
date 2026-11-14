@@ -1,9 +1,9 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -59,6 +59,7 @@ class Lead(Base):
 
     usuario: Mapped["Usuario | None"] = relationship(back_populates="leads")
     oportunidades: Mapped[list["Oportunidade"]] = relationship(back_populates="lead")
+    interacoes: Mapped[list["Interacao"]] = relationship(back_populates="lead")
 
 
 class Oportunidade(Base):
@@ -90,20 +91,33 @@ class Oportunidade(Base):
 
 
 class Interacao(Base):
+    """Anotação de um vendedor sobre um cliente (lead e/ou oportunidade): a agenda do time."""
+
     __tablename__ = "interacao"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    oportunidade_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("oportunidade.id"), index=True
+    # Ligada à oportunidade, ao lead ou aos dois (pelo menos um deles).
+    oportunidade_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("oportunidade.id"), index=True, nullable=True
     )
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("leads.id"), index=True, nullable=True
+    )
+    # Autor da anotação.
     usuario_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("usuario.id"), nullable=True
     )
     tipo: Mapped[str] = mapped_column(String(64), default="nota")
     descricao: Mapped[str] = mapped_column(Text, default="")
+    # Quando o contato aconteceu (pode ser registrado depois).
+    data: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    # Próximo contato combinado com o cliente (aparece na agenda).
+    retorno_em: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    oportunidade: Mapped["Oportunidade"] = relationship(back_populates="interacoes")
+    oportunidade: Mapped["Oportunidade | None"] = relationship(back_populates="interacoes")
+    lead: Mapped["Lead | None"] = relationship(back_populates="interacoes")
+    autor: Mapped["Usuario | None"] = relationship()
 
 
 class ConversaChatbot(Base):

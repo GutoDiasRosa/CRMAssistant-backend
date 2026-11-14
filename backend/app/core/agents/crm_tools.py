@@ -6,11 +6,13 @@ recebe a própria carteira, mesmo que peça dados de outra pessoa no chat.
 """
 
 import json
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Oportunidade, Usuario
+from app.db.models import Interacao, Oportunidade, Usuario
+from app.domain.repositories.anotacoes import AnotacaoRepository
 from app.domain.repositories.crm import LeadRepository, OportunidadeRepository
 
 TOOLS: list[dict[str, Any]] = [
@@ -47,8 +49,9 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "detalhes_oportunidade",
         "description": (
-            "Detalhes de uma oportunidade específica, incluindo dados do contato e histórico "
-            "de interações. Use para resumir um lead antes de uma reunião."
+            "Detalhes de uma oportunidade específica, incluindo dados do contato e as anotações "
+            "dos vendedores (histórico de contatos e próximo retorno). Use para resumir um lead "
+            "antes de uma reunião."
         ),
         "input_schema": {
             "type": "object",
@@ -71,6 +74,47 @@ TOOLS: list[dict[str, Any]] = [
                 "termo": {"type": "string", "description": "Parte do nome ou do e-mail."}
             },
             "required": ["termo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_anotacoes",
+        "description": (
+            "Anotações que os vendedores registraram sobre os clientes: ligações, e-mails, "
+            "WhatsApp, reuniões, visitas e notas, com data, autor e próximo retorno combinado. "
+            "Use para saber o que aconteceu com um cliente, o que foi feito num período ou o que "
+            "um vendedor registrou. Mais recentes primeiro."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "termo": {
+                    "type": "string",
+                    "description": "Parte do nome do lead/empresa ou de um assunto citado na anotação.",
+                },
+                "dias": {
+                    "type": "integer",
+                    "description": "Considera só os últimos N dias (padrão 30, máximo 365).",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "agenda_retornos",
+        "description": (
+            "Próximos contatos (retornos) agendados nas anotações, incluindo os atrasados, em "
+            "ordem de data. Use para perguntas como 'quem devo ligar hoje' ou 'o que tenho na "
+            "agenda esta semana'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dias_a_frente": {
+                    "type": "integer",
+                    "description": "Até quantos dias a partir de hoje (padrão 7; 0 = só hoje e atrasados).",
+                }
+            },
             "additionalProperties": False,
         },
     },
@@ -98,14 +142,21 @@ def _oportunidade(op: Oportunidade, com_interacoes: bool = False) -> dict[str, A
         "atualizado_em": op.updated_at.strftime("%d/%m/%Y") if op.updated_at else None,
     }
     if com_interacoes:
-        dados["interacoes"] = [
-            {
-                "tipo": i.tipo,
-                "descricao": i.descricao,
-                "data": i.created_at.strftime("%d/%m/%Y %H:%M"),
-            }
-            for i in sorted(op.interacoes, key=lambda i: i.created_at, reverse=True)
-        ]
+        dados["anotacoes"] = [_anotacao(i, com_cliente=False) for i in sorted(op.interacoes, key=lambda i: i.data, reverse=True)]
+    return dados
+
+
+def _anotacao(a: Interacao, com_cliente: bool = True) -> dict[str, Any]:
+    dados: dict[str, Any] = {
+        "data": a.data.strftime("%d/%m/%Y %H:%M") if a.data else None,
+        "tipo": a.tipo,
+        "texto": a.descricao,
+        "autor": a.autor.nome if a.autor else None,
+        "proximo_retorno": a.retorno_em.strftime("%d/%m/%Y") if a.retorno_em else None,
+    }
+    if com_cliente:
+        dados["lead"] = a.lead.nome if a.lead else None
+        dados["oportunidade"] = a.oportunidade.nome if a.oportunidade else None
     return dados
 
 
@@ -145,6 +196,18 @@ async def executar_ferramenta(
             }
             for lead in leads
         ]
+
+    elif nome == "consultar_anotacoes":
+        dias = min(max(int(entrada.get("dias") or 30), 1), 365)
+        anotacoes = await AnotacaoRepository(session, usuario).listar(
+            termo=entrada.get("termo"), inicio=datetime.now(UTC) - timedelta(days=dias), limit=60
+        )
+        resultado = [_anotacao(a) for a in anotacoes]
+
+    elif nome == "agenda_retornos":
+        dias = min(max(int(entrada.get("dias_a_frente") or 7), 0), 90)
+        anotacoes = await AnotacaoRepository(session, usuario).retornos(ate=date.today() + timedelta(days=dias))
+        resultado = [_anotacao(a) for a in anotacoes]
 
     elif nome == "performance_vendedores":
         resultado = await ops.performance_por_vendedor()

@@ -2,7 +2,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rd_station_sync import integracao, normalize
@@ -103,6 +103,12 @@ async def process_rd_webhook_payload(
             await session.execute(select(Oportunidade.id).where(Oportunidade.rd_deal_id == rd_id))
         ).scalar_one_or_none()
         if op_id:
+            # Anotações ligadas também ao lead continuam no histórico do cliente.
+            await session.execute(
+                update(Interacao)
+                .where(Interacao.oportunidade_id == op_id, Interacao.lead_id.is_not(None))
+                .values(oportunidade_id=None)
+            )
             await session.execute(delete(Interacao).where(Interacao.oportunidade_id == op_id))
             await session.execute(delete(Oportunidade).where(Oportunidade.id == op_id))
     elif rd_id and evento in EVENTOS_CONTATO:
