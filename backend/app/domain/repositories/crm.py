@@ -210,7 +210,8 @@ class OportunidadeRepository:
         ganho = _STATUS.in_(STATUS_GANHO)
         perdido = _STATUS.in_(STATUS_PERDIDO)
         etapa = func.lower(func.coalesce(Oportunidade.etapa_funil, ""))
-        qualificado = or_(ganho, and_(etapa != "", ~etapa.like("prospec%")))
+        # Qualificada: saiu da primeira etapa do funil ("Prospecção" no CRM Assist, "Sem contato" no RD).
+        qualificado = or_(ganho, and_(etapa != "", ~etapa.like("prospec%"), ~etapa.like("sem contato%")))
         criada = _no_periodo(Oportunidade.created_at, inicio, fim)
         ganha_no_periodo = and_(ganho, _no_periodo(Oportunidade.fechada_em, inicio, fim))
         perdida_no_periodo = and_(perdido, _no_periodo(Oportunidade.fechada_em, inicio, fim))

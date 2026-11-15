@@ -9,14 +9,16 @@ Usa o mesmo código das telas (envio.enviar_oportunidade / enviar_lead), então 
 conectado NESTE banco (tela Integração RD). Os ids do RD ficam gravados nos registros, por isso o
 script pode ser repetido: o que já foi enviado é pulado e um envio interrompido continua de onde parou.
 
-As etapas locais são ligadas às do funil do RD pelo nome; as que não existirem lá vão para a etapa
-na mesma posição do funil (1ª etapa local -> 1ª etapa do RD, e assim por diante).
+As etapas locais são ligadas às do funil do RD pelo --mapa, depois pelo nome; as que sobrarem vão
+para a etapa na mesma posição do funil, sem voltar para antes de uma etapa já ligada. Cada oportunidade
+passa a ter o nome da etapa do RD também no CRM Assist (é o que o webhook do RD devolveria).
 
 Uso (dentro de backend/, com o .venv ativo):
     python -m scripts.envio_carga_rd --simular      # mostra o que seria enviado, sem enviar
     python -m scripts.envio_carga_rd --limite 3     # envia só 3 oportunidades, para conferir no RD
     python -m scripts.envio_carga_rd                # envia o restante
     python -m scripts.envio_carga_rd --funil "Funil Padrão"
+    python -m scripts.envio_carga_rd --mapa "Prospecção=Sem contato;Qualificado=Contato feito"
 
 O banco é o de POSTGRES_URL. Se não for local, é preciso repetir o comando com --confirmar.
 """
@@ -45,13 +47,39 @@ def _chave(s: str | None) -> str:
     return " ".join(s.lower().split())
 
 
-def mapear_etapas(locais: list[str], etapas_rd: list[dict]) -> dict[str, dict]:
-    """Etapa local -> etapa do RD: pelo nome e, sem correspondência, pela posição no funil."""
-    por_nome = {_chave(e["nome"]): e for e in etapas_rd}
-    mapa = {}
+def mapear_etapas(locais: list[str], etapas_rd: list[dict], escolhidas: dict[str, str] | None = None) -> dict[str, dict]:
+    """Etapa local -> etapa do RD (`locais` em ordem de funil).
+
+    Vale primeiro o `escolhidas` (nome local -> nome no RD), depois o mesmo nome; o resto vai para
+    a posição equivalente no funil do RD, sem voltar para antes da etapa anterior já ligada.
+    """
+    por_nome = {_chave(e["nome"]): i for i, e in enumerate(etapas_rd)}
+    escolhidas = {_chave(k): _chave(v) for k, v in (escolhidas or {}).items()}
+    for local, rd in escolhidas.items():
+        if rd not in por_nome:
+            raise SystemExit(f"Etapa '{rd}' do --mapa não existe no funil do RD: {[e['nome'] for e in etapas_rd]}")
+    ultima = len(etapas_rd) - 1
+    mapa, anterior = {}, 0
     for i, nome in enumerate(locais):
-        mapa[nome] = por_nome.get(_chave(nome)) or etapas_rd[min(i, len(etapas_rd) - 1)]
+        indice = por_nome.get(escolhidas.get(_chave(nome), _chave(nome)))
+        if indice is None:
+            proporcional = round(i * ultima / max(len(locais) - 1, 1))
+            indice = max(proporcional, anterior)
+        mapa[nome] = etapas_rd[indice]
+        anterior = indice
     return mapa
+
+
+def ler_mapa(texto: str | None) -> dict[str, str]:
+    """"Prospecção=Sem contato;Qualificado=Contato feito" -> {"Prospecção": "Sem contato", ...}."""
+    pares = {}
+    for item in (texto or "").split(";"):
+        if item.strip():
+            local, _, rd = item.partition("=")
+            if not rd.strip():
+                raise SystemExit(f"Item do --mapa sem '=': {item}")
+            pares[local.strip()] = rd.strip()
+    return pares
 
 
 def _ordem_local(nome: str) -> int:
@@ -80,6 +108,7 @@ async def main() -> None:
     p.add_argument("--simular", action="store_true", help="mostra o que seria enviado, sem enviar")
     p.add_argument("--limite", type=int, default=None, help="envia no máximo N oportunidades")
     p.add_argument("--funil", default=None, help="nome do funil do RD (padrão: o primeiro)")
+    p.add_argument("--mapa", default=None, help='ligação de etapas: "Local=Etapa no RD;Outra=Etapa no RD"')
     p.add_argument("--confirmar", action="store_true", help="obrigatório quando o banco não é local")
     args = p.parse_args()
 
@@ -146,7 +175,7 @@ async def main() -> None:
                 funil = funil or funis[0]
                 if not funil["etapas"]:
                     raise SystemExit(f"O funil '{funil['nome']}' não tem etapas.")
-                mapa = mapear_etapas(locais, funil["etapas"])
+                mapa = mapear_etapas(locais, funil["etapas"], ler_mapa(args.mapa))
                 print(f"Funil do RD: {funil['nome']}")
             for nome in locais:
                 destino = mapa[nome]["nome"] if nome in mapa else "?"
@@ -165,7 +194,9 @@ async def main() -> None:
             ids_ops = [(op.id, op.nome) for op in ops]
             for op in ops:
                 if op.etapa_funil in mapa:
-                    op.rd_stage_id = str(mapa[op.etapa_funil]["id"])
+                    destino = mapa[op.etapa_funil]
+                    op.rd_stage_id = str(destino["id"])
+                    op.etapa_funil = destino["nome"]  # o funil local passa a usar as etapas do RD
             await session.commit()
             ids_leads = [(lead.id, lead.nome) for lead in leads_sem_op]
 

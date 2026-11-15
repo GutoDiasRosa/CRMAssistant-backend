@@ -60,16 +60,19 @@ async def listar_funis(access: str) -> list[dict[str, Any]]:
 
 
 async def _id_usuario_rd(access: str, email: str | None) -> str | None:
-    """Usuário do RD com o mesmo e-mail do responsável no CRM Assist."""
-    if not email:
-        return None
+    """Usuário do RD com o mesmo e-mail do responsável no CRM Assist; sem correspondência, o primeiro
+    usuário ativo do RD (o RD exige um responsável em toda negociação)."""
 
     async def carregar():
+        usuarios = [u for u in await listar(access, "/users") if u.get("id")]
+        ativos = [u for u in usuarios if u.get("active", True) is not False] or usuarios
         return {
-            str(u["email"]).lower(): u["id"] for u in await listar(access, "/users") if u.get("email") and u.get("id")
+            "por_email": {str(u["email"]).lower(): u["id"] for u in usuarios if u.get("email")},
+            "padrao": ativos[0]["id"] if ativos else None,
         }
 
-    return (await _em_cache("usuarios", carregar)).get(email.lower())
+    usuarios = await _em_cache("usuarios", carregar)
+    return usuarios["por_email"].get((email or "").lower()) or usuarios["padrao"]
 
 
 async def enviar_contato(
@@ -151,6 +154,14 @@ async def enviar_oportunidade(session: AsyncSession, op_id: UUID) -> None:
         contato_id = await enviar_contato(
             access, rd_id=op.lead.rd_lead_id, nome=op.lead.nome or op.nome, email=op.lead.email, telefone=op.lead.telefone
         )
+        # Grava já o contato: se a negociação falhar, o próximo envio atualiza o mesmo contato no RD
+        # em vez de criar outro.
+        try:
+            await vincular_lead(session, op.lead, contato_id)
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()  # o webhook ligou ao mesmo tempo; a união acontece no fim
+        op = await _carregar_oportunidade(session, op_id)
 
     dados: dict[str, Any] = {"name": op.nome}
     if op.valor is not None:
