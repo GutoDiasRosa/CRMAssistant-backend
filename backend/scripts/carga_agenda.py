@@ -22,7 +22,7 @@ import random
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
@@ -122,7 +122,12 @@ def _momento(rng: random.Random, m: datetime, agora: datetime) -> datetime:
 
 def _etapa_indice(etapa: str | None) -> int:
     e = (etapa or "").lower()
-    for chave, i in (("prospec", 0), ("qualif", 1), ("proposta", 2), ("negocia", 3)):
+    # Nomes do CRM Assist e do funil padrão do RD Station CRM (usado depois da sincronização).
+    etapas = (
+        ("prospec", 0), ("sem contato", 0), ("qualif", 1), ("contato feito", 1),
+        ("identifica", 1), ("apresenta", 2), ("proposta", 2), ("negocia", 3),
+    )
+    for chave, i in etapas:
         if chave in e:
             return i
     return 1
@@ -223,6 +228,11 @@ async def main() -> None:
     p.add_argument("--semente", type=int, default=2026, help="semente do sorteio")
     p.add_argument("--limpar", action="store_true", help="remove as anotações dos registros da carga e sai")
     p.add_argument("--confirmar", action="store_true", help="obrigatório quando o banco não é local")
+    p.add_argument(
+        "--manter-existentes",
+        action="store_true",
+        help="gera a carga mesmo que já existam anotações nos registros (as existentes são mantidas)",
+    )
     args = p.parse_args()
 
     url = urlsplit(get_settings().postgres_url)
@@ -237,8 +247,12 @@ async def main() -> None:
                 await session.commit()
                 print(f"{n} anotações removidas.")
                 return
-            if (await session.execute(select(Interacao.id).where(_filtro_carga()).limit(1))).first():
-                raise SystemExit("Os registros da carga já têm anotações. Para refazer, rode antes com --limpar.")
+            existentes = (await session.execute(select(func.count()).where(_filtro_carga()))).scalar_one()
+            if existentes and not args.manter_existentes:
+                raise SystemExit(
+                    f"Os registros da carga já têm {existentes} anotação(ões). Para refazer, rode antes com --limpar "
+                    "(apaga todas) ou use --manter-existentes para gerar a carga sem apagar as que existem."
+                )
 
             leads = (
                 await session.execute(
