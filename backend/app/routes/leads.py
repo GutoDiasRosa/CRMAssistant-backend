@@ -1,7 +1,7 @@
 """Leads (contatos do RD Station CRM): listagem, detalhe, criação e edição (RF07)."""
 
-from datetime import datetime
-from typing import Annotated
+from datetime import date, datetime, timedelta, timezone
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,13 +12,15 @@ from sqlalchemy.orm import selectinload
 
 from app.core.rd_station_sync import envio
 from app.db.database import get_session
-from app.db.models import Lead, Oportunidade, Usuario
+from app.db.models import STATUS_FECHADO, STATUS_GANHO, Lead, Oportunidade, Usuario
 from app.dependencies import get_current_user, pode_ver_todos_oportunidades
 from app.routes.oportunidades import EnvioRd, Pessoa, _responsavel, enviar_ao_rd
 
 router = APIRouter(prefix="/api/crm/leads", tags=["crm"])
 
 LIMITE_LISTA = 200
+# Datas dos filtros são dias no horário de Brasília.
+BRT = timezone(timedelta(hours=-3))
 
 
 class LeadBody(BaseModel):
@@ -120,7 +122,19 @@ async def listar(
     user: Annotated[Usuario, Depends(get_current_user)],
     busca: Annotated[str | None, Query(max_length=100, description="Parte do nome, e-mail ou telefone")] = None,
     usuario_id: Annotated[UUID | None, Query(description="Filtra pelo vendedor responsável")] = None,
+    criado_de: Annotated[date | None, Query(description="Cadastrados a partir deste dia (inclusive)")] = None,
+    criado_ate: Annotated[date | None, Query(description="Cadastrados até este dia (inclusive)")] = None,
+    oportunidades: Annotated[
+        Literal["com_aberta", "com_ganha", "sem"] | None,
+        Query(description="com_aberta: tem negociação em aberto; com_ganha: já comprou; sem: nenhuma"),
+    ] = None,
+    rd: Annotated[
+        Literal["sincronizado", "local"] | None,
+        Query(description="sincronizado: está no RD Station; local: só no CRM Assist"),
+    ] = None,
 ):
+    if criado_de and criado_ate and criado_de > criado_ate:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A data inicial é depois da final")
     qtd = (
         select(Oportunidade.lead_id, func.count(Oportunidade.id).label("qtd"))
         .group_by(Oportunidade.lead_id)
@@ -140,6 +154,22 @@ async def listar(
     if busca and busca.strip():
         padrao = f"%{busca.strip()}%"
         stmt = stmt.where(Lead.nome.ilike(padrao) | Lead.email.ilike(padrao) | Lead.telefone.ilike(padrao))
+    if criado_de:
+        stmt = stmt.where(Lead.created_at >= datetime(criado_de.year, criado_de.month, criado_de.day, tzinfo=BRT))
+    if criado_ate:
+        fim = datetime(criado_ate.year, criado_ate.month, criado_ate.day, tzinfo=BRT) + timedelta(days=1)
+        stmt = stmt.where(Lead.created_at < fim)
+    status_op = func.lower(func.coalesce(Oportunidade.status, ""))
+    if oportunidades == "com_aberta":
+        stmt = stmt.where(Lead.oportunidades.any(~status_op.in_(STATUS_FECHADO)))
+    elif oportunidades == "com_ganha":
+        stmt = stmt.where(Lead.oportunidades.any(status_op.in_(STATUS_GANHO)))
+    elif oportunidades == "sem":
+        stmt = stmt.where(~Lead.oportunidades.any())
+    if rd == "sincronizado":
+        stmt = stmt.where(Lead.rd_lead_id.is_not(None))
+    elif rd == "local":
+        stmt = stmt.where(Lead.rd_lead_id.is_(None))
     linhas = (await session.execute(stmt)).all()
     return [
         LeadResumo(

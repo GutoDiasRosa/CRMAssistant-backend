@@ -21,6 +21,16 @@ def _no_periodo(coluna, inicio: datetime | None, fim: datetime | None):
     return and_(*condicoes) if condicoes else true()
 
 
+# Situação da oportunidade para filtros de tela.
+SITUACOES = {
+    "abertas": ~_STATUS.in_(STATUS_FECHADO),
+    "em_andamento": ~_STATUS.in_(STATUS_FECHADO + ("paused",)),
+    "pausadas": _STATUS == "paused",
+    "ganhas": _STATUS.in_(STATUS_GANHO),
+    "perdidas": _STATUS.in_(STATUS_PERDIDO),
+}
+
+
 def _contar(condicao):
     return func.count(case((condicao, Oportunidade.id)))
 
@@ -94,32 +104,40 @@ class OportunidadeRepository:
         usuario_id: UUID | None = None,
         inicio: datetime | None = None,
         fim: datetime | None = None,
+        busca: str | None = None,
+        situacao: str | None = None,
+        valor_min: float | None = None,
+        valor_max: float | None = None,
     ) -> list[Oportunidade]:
-        """Lista oportunidades respeitando RF07, com filtros opcionais de vendedor e período.
+        """Lista oportunidades respeitando RF07, com filtros opcionais.
 
-        O período considera a data em que a oportunidade entrou no CRM Assist (created_at),
-        com `inicio` inclusivo e `fim` exclusivo.
+        - período: data em que a oportunidade entrou no CRM Assist (created_at), `inicio`
+          inclusivo e `fim` exclusivo;
+        - busca: parte do nome da oportunidade (empresa) ou do contato;
+        - situacao: ver SITUACOES;
+        - valor_min / valor_max: faixa de valor (inclusive).
         """
         stmt = select(Oportunidade).options(selectinload(Oportunidade.lead))
         if usuario_id:
             stmt = stmt.where(Oportunidade.usuario_id == usuario_id)
-        if inicio:
-            stmt = stmt.where(Oportunidade.created_at >= inicio)
-        if fim:
-            stmt = stmt.where(Oportunidade.created_at < fim)
+        stmt = stmt.where(_no_periodo(Oportunidade.created_at, inicio, fim))
+        if busca and busca.strip():
+            padrao = f"%{busca.strip()}%"
+            contato = select(Lead.id).where(Lead.nome.ilike(padrao))
+            stmt = stmt.where(or_(Oportunidade.nome.ilike(padrao), Oportunidade.lead_id.in_(contato)))
+        if situacao:
+            stmt = stmt.where(SITUACOES[situacao])
+        if valor_min is not None:
+            stmt = stmt.where(Oportunidade.valor >= valor_min)
+        if valor_max is not None:
+            stmt = stmt.where(Oportunidade.valor <= valor_max)
         stmt = self._scoped_filter(stmt.order_by(Oportunidade.updated_at.desc()).limit(limit))
         r = await self.session.execute(stmt)
         return list(r.scalars().all())
 
-    async def kanban_por_etapa(
-        self,
-        *,
-        usuario_id: UUID | None = None,
-        inicio: datetime | None = None,
-        fim: datetime | None = None,
-    ) -> dict[str, list[dict]]:
-        """Agrupa oportunidades por etapa_funil para UI kanban (RF04)."""
-        oportunidades = await self.list_oportunidades(usuario_id=usuario_id, inicio=inicio, fim=fim)
+    async def kanban_por_etapa(self, **filtros) -> dict[str, list[dict]]:
+        """Agrupa oportunidades por etapa_funil para UI kanban (RF04); filtros de list_oportunidades."""
+        oportunidades = await self.list_oportunidades(**filtros)
         buckets: dict[str, list[dict]] = {}
         for op in oportunidades:
             etapa = op.etapa_funil or "Sem etapa"

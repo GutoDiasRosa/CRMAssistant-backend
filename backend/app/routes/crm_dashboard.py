@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,11 +23,28 @@ async def kanban(
         datetime | None, Query(description="Criadas a partir deste instante (ISO 8601, inclusive)")
     ] = None,
     fim: Annotated[datetime | None, Query(description="Criadas antes deste instante (ISO 8601)")] = None,
+    busca: Annotated[str | None, Query(max_length=100, description="Parte do nome da empresa ou do contato")] = None,
+    situacao: Annotated[
+        Literal["abertas", "em_andamento", "pausadas", "ganhas", "perdidas"] | None,
+        Query(description="abertas = em andamento + pausadas"),
+    ] = None,
+    valor_min: Annotated[float | None, Query(ge=0, description="Valor mínimo (inclusive)")] = None,
+    valor_max: Annotated[float | None, Query(ge=0, description="Valor máximo (inclusive)")] = None,
 ):
     if inicio and fim and inicio >= fim:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Início do período deve ser antes do fim")
+    if valor_min is not None and valor_max is not None and valor_min > valor_max:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Valor mínimo maior que o máximo")
     repo = OportunidadeRepository(session, user)
-    return await repo.kanban_por_etapa(usuario_id=usuario_id, inicio=inicio, fim=fim)
+    return await repo.kanban_por_etapa(
+        usuario_id=usuario_id,
+        inicio=inicio,
+        fim=fim,
+        busca=busca,
+        situacao=situacao,
+        valor_min=valor_min,
+        valor_max=valor_max,
+    )
 
 
 @router.get("/performance", summary="Performance do time por vendedor (RF06 + RF07)")
