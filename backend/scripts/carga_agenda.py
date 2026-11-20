@@ -1,6 +1,8 @@
 """
 Carga de anotações (agenda) para os leads e oportunidades da carga de demonstração.
 
+Para carregar ou remover tudo de uma vez, use scripts/dados_demo.py.
+
 Precisa da carga_demo já feita. Para cada oportunidade, monta o histórico de contatos de acordo
 com a etapa em que ela está (primeiro contato, qualificação, visita, proposta, negociação, fechamento),
 com o SDR nas primeiras etapas e o closer da proposta em diante. As oportunidades em aberto ganham
@@ -223,7 +225,7 @@ def _filtro_carga():
     return or_(Interacao.lead_id.in_(leads), Interacao.oportunidade_id.in_(ops))
 
 
-async def main() -> None:
+async def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Anotações e retornos de agenda para a carga de demonstração.")
     p.add_argument("--semente", type=int, default=2026, help="semente do sorteio")
     p.add_argument("--limpar", action="store_true", help="remove as anotações dos registros da carga e sai")
@@ -233,7 +235,7 @@ async def main() -> None:
         action="store_true",
         help="gera a carga mesmo que já existam anotações nos registros (as existentes são mantidas)",
     )
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     url = urlsplit(get_settings().postgres_url)
     print(f"Banco: {url.hostname}:{url.port or 5432}{url.path}")

@@ -19,5 +19,12 @@ docker compose up --build
 
 - API: <http://localhost:8000>
 - Documentação: <http://localhost:8000/docs>
+- Administrador: `admin@crmassist.dev` / `admin123` (definidos no `docker-compose.yml`)
 
-Detalhes de arquitetura, endpoints e configuração estão no [README do backend](backend/README.md).
+Para carregar dados de teste (opcional):
+
+```bash
+docker compose exec api python -m scripts.dados_demo carregar
+```
+
+O passo a passo completo, incluindo o front-end e a escolha de carregar ou não os dados de teste, está no **[Guia da banca](GUIA-DA-BANCA.md)**. Arquitetura, endpoints e configuração estão no [README do backend](backend/README.md).

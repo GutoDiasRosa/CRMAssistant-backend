@@ -2,7 +2,7 @@
 Faz uma bateria de perguntas ao assistente (POST /chat) e mostra as respostas, para conferir
 a IA depois de mexer nas ferramentas, no prompt ou nos dados de demonstração.
 
-Usa os usuários de demonstração (seed_dev / carga_demo). Cada pergunta abre uma conversa nova.
+Usa a equipe de demonstração (scripts/dados_demo.py). Cada pergunta abre uma conversa nova.
 
 Uso (dentro de backend/, com o .venv ativo e a API no ar):
     python -m scripts.testar_assistente
@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-from scripts.seed_dev import SENHA_DEMO
+from scripts.carga_demo import SENHA_DEMO
 
 USUARIOS = {
     "gerente": "gerente@crmassist.dev",

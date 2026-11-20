@@ -1,10 +1,13 @@
 """
 Carga de dados de demonstração: leads e oportunidades espalhados ao longo de 2026.
 
-Diferente do seed_dev (8 registros, todos com a data de hoje), esta carga grava direto no
-banco para poder definir created_at/updated_at: os registros nascem em dias úteis e horário
-comercial, de 1º de janeiro até agora, com mais volume nos meses recentes. Oportunidades
-antigas já aparecem ganhas ou perdidas; as recentes ainda estão nas primeiras etapas.
+Para carregar ou remover tudo de uma vez (equipe, leads, oportunidades e agenda), use
+scripts/dados_demo.py. Este módulo cuida só da equipe, dos leads e das oportunidades.
+
+A carga grava direto no banco para poder definir as datas: os registros nascem em dias úteis
+e horário comercial, de 1º de janeiro até agora, com mais volume nos meses recentes.
+Oportunidades antigas já aparecem ganhas ou perdidas (com data de fechamento); as recentes
+ainda estão nas primeiras etapas.
 
 Os registros NÃO vão para o RD Station (ficam sem rd_lead_id / rd_deal_id, como qualquer
 registro criado com a integração desconectada) e levam dados_extras["carga"] = "demo-2026",
@@ -12,9 +15,9 @@ o que permite removê-los depois com --limpar.
 
 Uso (dentro de backend/, com o .venv ativo):
     python -m scripts.carga_demo                      # ~140 leads, usa os vendedores ativos
-    python -m scripts.carga_demo --criar-vendedores   # cria também o time de demonstração
+    python -m scripts.carga_demo --criar-vendedores   # cria também a equipe de demonstração
     python -m scripts.carga_demo --leads 80 --etapas "Sem contato,Contato feito,Apresentação,Proposta enviada"
-    python -m scripts.carga_demo --limpar             # remove a carga
+    python -m scripts.carga_demo --limpar             # remove a carga (os usuários ficam)
 
 O banco é o de POSTGRES_URL. Se não for local, é preciso repetir o comando com --confirmar.
 """
@@ -33,7 +36,6 @@ from app.core.rd_station_sync.upsert import log_sync
 from app.db.database import async_session_factory, engine
 from app.db.models import Lead, Oportunidade, Usuario
 from app.security import hash_password
-from scripts.seed_dev import SENHA_DEMO, USUARIOS
 
 MARCA = "demo-2026"
 BRT = timezone(timedelta(hours=-3))
@@ -41,8 +43,13 @@ INICIO = datetime(2026, 1, 1, tzinfo=BRT)
 ETAPAS_PADRAO = "Prospecção,Qualificado,Proposta enviada,Negociação"
 HOSTS_LOCAIS = {"localhost", "127.0.0.1", "::1", "db"}
 
-VENDEDORES_EXTRAS = [
+# Equipe de demonstração. Senha só para ambientes de teste: está publicada no README.
+SENHA_DEMO = "demo1234"
+EQUIPE_DEMO = [
+    ("gerente@crmassist.dev", "Rafael Andrade", "GERENTE"),  # vê toda a equipe
+    ("sdr@crmassist.dev", "Carlos Eduardo Mendes", "SDR"),  # vê só a própria carteira
     ("sdr2@crmassist.dev", "Juliana Pires", "SDR"),
+    ("closer@crmassist.dev", "Tatiane Rocha", "CLOSER"),
     ("closer2@crmassist.dev", "Marcos Vinícius Teixeira", "CLOSER"),
 ]
 
@@ -248,11 +255,11 @@ def gerar(rng: random.Random, n_leads: int, etapas: list[str], vendedores: list[
 
 
 async def _garantir_vendedores(session) -> None:
-    for email, nome, perfil in [*USUARIOS, *VENDEDORES_EXTRAS]:
+    for email, nome, perfil in EQUIPE_DEMO:
         existe = (await session.execute(select(Usuario.id).where(Usuario.email == email))).scalar_one_or_none()
         if existe is None:
             session.add(Usuario(email=email, nome=nome, perfil=perfil, hashed_password=hash_password(SENHA_DEMO)))
-            print(f"Usuário criado: {email} ({perfil}), senha de demonstração do seed_dev")
+            print(f"Usuário criado: {email} ({perfil}), senha {SENHA_DEMO}")
     await session.flush()
 
 
@@ -283,7 +290,7 @@ async def limpar(session) -> tuple[int, int]:
     return n_leads, n_ops
 
 
-async def main() -> None:
+async def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Carga de leads e oportunidades de demonstração ao longo de 2026.")
     p.add_argument("--leads", type=int, default=140, help="quantidade de leads (padrão: 140)")
     p.add_argument("--etapas", default=ETAPAS_PADRAO, help="etapas do funil, em ordem, separadas por vírgula")
@@ -291,7 +298,7 @@ async def main() -> None:
     p.add_argument("--criar-vendedores", action="store_true", help="cria o time de demonstração (SDRs e closers)")
     p.add_argument("--limpar", action="store_true", help="remove a carga e sai")
     p.add_argument("--confirmar", action="store_true", help="obrigatório quando o banco não é local")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     etapas = [e.strip() for e in args.etapas.split(",") if e.strip()]
     if len(etapas) < 2:
