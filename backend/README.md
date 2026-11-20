@@ -236,8 +236,8 @@ As migrações (`alembic upgrade head`) rodam automaticamente na inicialização
 O banco começa vazio, só com o administrador. Para avaliar o sistema com dados, há uma carga de demonstração que cria:
 
 - uma equipe de 5 usuários (gerente, 2 SDRs e 2 closers);
-- cerca de 140 leads e 142 oportunidades espalhados por 2026, com vendas ganhas e perdidas em datas coerentes;
-- a agenda: cerca de 760 anotações (ligações, e-mails, visitas...) e os próximos retornos.
+- cerca de 140 leads e 140 oportunidades espalhados por 2026, com vendas ganhas e perdidas em datas coerentes;
+- a agenda: cerca de 750 anotações (ligações, e-mails, visitas...) e os próximos retornos.
 
 Nada é enviado ao RD Station. Com Docker, na raiz do repositório:
 

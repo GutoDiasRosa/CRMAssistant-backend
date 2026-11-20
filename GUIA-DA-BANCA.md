@@ -70,8 +70,8 @@ docker compose exec api python -m scripts.dados_demo carregar
 Em poucos segundos o comando cria:
 
 - uma equipe de 5 pessoas: 1 gerente, 2 SDRs (prospectores) e 2 closers;
-- cerca de 140 leads e 142 oportunidades, de janeiro até hoje, com vendas ganhas e perdidas em datas coerentes;
-- a agenda: cerca de 760 anotações de contatos (ligações, e-mails, visitas, reuniões) e os próximos retornos de cada vendedor.
+- cerca de 140 leads e 140 oportunidades, de janeiro até hoje, com vendas ganhas e perdidas em datas coerentes;
+- a agenda: cerca de 750 anotações de contatos (ligações, e-mails, visitas, reuniões) e os próximos retornos de cada vendedor.
 
 A saída termina com `Pronto. Entre com gerente@crmassist.dev / demo1234 ...`.
 

@@ -321,7 +321,10 @@ async def main(argv: list[str] | None = None) -> None:
                 await session.execute(select(Lead.id).where(Lead.dados_extras["carga"].as_string() == MARCA).limit(1))
             ).first()
             if ja_existe:
-                raise SystemExit("A carga já está neste banco. Para refazer, rode antes com --limpar.")
+                raise SystemExit(
+                    "A carga já está neste banco. Para refazer, remova antes: "
+                    "python -m scripts.dados_demo limpar (ou carga_demo --limpar)."
+                )
 
             if args.criar_vendedores:
                 await _garantir_vendedores(session)
