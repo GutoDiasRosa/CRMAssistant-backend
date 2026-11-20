@@ -3,7 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import and_, case, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.db.models import STATUS_FECHADO, STATUS_GANHO, STATUS_PERDIDO, Interacao, Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
@@ -39,20 +39,40 @@ def _somar(condicao):
     return func.coalesce(func.sum(case((condicao, Oportunidade.valor))), 0)
 
 
+# ---- RF07: o que SDRs e closers enxergam (gerente, diretor, analista e admin veem tudo) ----
+#
+# - oportunidades: só as próprias;
+# - leads: os próprios e os contatos das oportunidades que conduzem. O SDR prospecta o lead e, da
+#   proposta em diante, o closer assume a negociação: ele precisa ver e anotar no contato dela;
+# - no detalhe de um lead, o dono do lead vê todas as oportunidades dele; quem enxerga o lead só
+#   por conduzir um negócio vê apenas as próprias oportunidades.
+
+
+def conduz_negocio_do_lead(usuario: Usuario):
+    """Condição SQL: o usuário é dono de alguma oportunidade do lead (correlacionada com Lead)."""
+    op = aliased(Oportunidade)
+    return select(op.id).where(op.lead_id == Lead.id, op.usuario_id == usuario.id).exists()
+
+
+def leads_visiveis(usuario: Usuario):
+    """Condição SQL dos leads que o usuário pode ver (RF07)."""
+    if pode_ver_todos_oportunidades(usuario):
+        return true()
+    return or_(Lead.usuario_id == usuario.id, conduz_negocio_do_lead(usuario))
+
+
+def oportunidade_visivel_no_lead(usuario: Usuario, lead: Lead, op: Oportunidade) -> bool:
+    """Se a oportunidade aparece no detalhe do lead para este usuário (RF07)."""
+    return pode_ver_todos_oportunidades(usuario) or usuario.id in (lead.usuario_id, op.usuario_id)
+
+
 class LeadRepository:
     def __init__(self, session: AsyncSession, usuario: Usuario):
         self.session = session
         self.usuario = usuario
 
     def _scoped_filter(self, stmt):
-        if pode_ver_todos_oportunidades(self.usuario):
-            return stmt
-        return stmt.where(Lead.usuario_id == self.usuario.id)
-
-    async def list_leads(self, limit: int = 100) -> list[Lead]:
-        stmt = self._scoped_filter(select(Lead).order_by(Lead.updated_at.desc()).limit(limit))
-        r = await self.session.execute(stmt)
-        return list(r.scalars().all())
+        return stmt.where(leads_visiveis(self.usuario))
 
     async def buscar(self, termo: str, limit: int = 20) -> list[Lead]:
         """Busca por nome ou e-mail (sem diferenciar maiúsculas), respeitando RF07."""
@@ -78,13 +98,6 @@ class LeadRepository:
             .where(Lead.id == lead_id)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
-
-    async def get_by_rd_id(self, rd_lead_id: str) -> Lead | None:
-        stmt = select(Lead).where(Lead.rd_lead_id == rd_lead_id)
-        if not pode_ver_todos_oportunidades(self.usuario):
-            stmt = stmt.where(Lead.usuario_id == self.usuario.id)
-        r = await self.session.execute(stmt)
-        return r.scalar_one_or_none()
 
 
 class OportunidadeRepository:
@@ -283,13 +296,17 @@ class OportunidadeRepository:
         perdida = and_(_STATUS.in_(STATUS_PERDIDO), _no_periodo(Oportunidade.fechada_em, inicio, fim))
         aberta = and_(criada, ~_STATUS.in_(STATUS_FECHADO))
 
-        base_leads = select(func.count()).select_from(Lead).where(_no_periodo(Lead.created_at, inicio, fim))
+        # Leads: os mesmos da tela Leads (os próprios e os contatos dos negócios que conduz).
+        base_leads = (
+            select(func.count())
+            .select_from(Lead)
+            .where(_no_periodo(Lead.created_at, inicio, fim), leads_visiveis(self.usuario))
+        )
         base_ops = select(
             _contar(criada), _somar(criada), _contar(aberta), _somar(aberta),
             _contar(ganha), _somar(ganha), _contar(perdida), _somar(perdida),
         )
         if not pode_ver_todos_oportunidades(self.usuario):
-            base_leads = base_leads.where(Lead.usuario_id == self.usuario.id)
             base_ops = base_ops.where(Oportunidade.usuario_id == self.usuario.id)
         n_leads = (await self.session.execute(base_leads)).scalar_one()
         n_ops, valor_total, n_abertas, valor_abertas, n_ganhas, valor_ganhas, n_perdidas, valor_perdidas = (

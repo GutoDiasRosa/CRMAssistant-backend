@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import STATUS_FECHADO, Interacao, Oportunidade, Usuario
 from app.domain.repositories.anotacoes import AnotacaoRepository
-from app.domain.repositories.crm import LeadRepository, OportunidadeRepository
+from app.domain.repositories.crm import LeadRepository, OportunidadeRepository, oportunidade_visivel_no_lead
 
 # Horário de Brasília: define "hoje" e o começo/fim dos dias informados pelo usuário.
 BRT = timezone(timedelta(hours=-3))
@@ -397,6 +397,7 @@ async def executar_ferramenta(
                             "fechada_em": _data(op.fechada_em),
                         }
                         for op in sorted(lead.oportunidades, key=lambda o: o.created_at, reverse=True)
+                        if oportunidade_visivel_no_lead(usuario, lead, op)
                     ],
                     "anotacoes": [_anotacao(a) for a in anotacoes],
                 }
@@ -411,7 +412,9 @@ async def executar_ferramenta(
                 "telefone": lead.telefone,
                 "status": lead.status,
                 "responsavel": lead.usuario.nome if lead.usuario else None,
-                "oportunidades": [op.nome for op in lead.oportunidades],
+                "oportunidades": [
+                    op.nome for op in lead.oportunidades if oportunidade_visivel_no_lead(usuario, lead, op)
+                ],
             }
             for lead in leads
         ]

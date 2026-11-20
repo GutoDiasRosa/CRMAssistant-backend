@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.agents.crm_tools import TOOLS, executar_ferramenta, hoje_brt
 from app.core.agents.intent_router_crm import classify_intent
+from app.core.agents.modo_sem_ia import responder_sem_ia
 from app.db.models import ConversaChatbot, Mensagem, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
-from app.domain.repositories.crm import OportunidadeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -184,16 +184,19 @@ class CrmAssistantOrchestratorService:
 
         return "Essa pergunta exigiu consultas demais. Tente dividir em perguntas menores."
 
-    async def _fallback_sem_ia(self, intent: str) -> str:
-        """Resposta simples quando ANTHROPIC_API_KEY não está configurada."""
-        if intent == "cumprimento":
-            return "Olá! Sou o assistente do CRM. Posso ajudar com funil, leads, performance do time e relatórios."
-        if intent == "fora_de_escopo":
-            return "Esse assunto está fora do escopo do assistente de vendas e CRM."
-        m = await OportunidadeRepository(self.session, self.usuario).metricas_resumo()
-        return (
-            f"(Modo sem IA) Você tem {m['total_leads']} leads e {m['total_oportunidades']} "
-            "oportunidades. Configure ANTHROPIC_API_KEY no backend para respostas completas."
+    async def _fallback_sem_ia(self, mensagem: str, intent: str) -> str:
+        """Resposta sem ANTHROPIC_API_KEY: as perguntas diretas são respondidas com as mesmas
+        ferramentas do Claude, que já aplicam o RF07 (ver core/agents/modo_sem_ia.py)."""
+
+        async def executar(nome: str, entrada: dict) -> str:
+            return await executar_ferramenta(nome, entrada, self.session, self.usuario)
+
+        return await responder_sem_ia(
+            mensagem,
+            intent,
+            executar,
+            nome_usuario=self.usuario.nome,
+            ve_todo_time=pode_ver_todos_oportunidades(self.usuario),
         )
 
     async def handle_chat(self, mensagem: str, session_id: str | None) -> dict:
@@ -207,7 +210,7 @@ class CrmAssistantOrchestratorService:
         intent = classify_intent(mensagem)
         settings = get_settings()
         if not settings.anthropic_api_key:
-            reply = await self._fallback_sem_ia(intent)
+            reply = await self._fallback_sem_ia(mensagem, intent)
         else:
             try:
                 reply = await self._responder_com_claude(historico, mensagem)

@@ -103,7 +103,7 @@ A API é organizada em camadas com responsabilidades separadas: rotas enxutas, u
 
 4. As ferramentas consultam o banco pelos repositórios, que **já filtram pelo perfil do usuário** (RF07). Um SDR não consegue ver dados de outra pessoa nem pedindo pelo chat.
 5. O modelo responde em português com base nos dados retornados, com instrução para não inventar números. Se ele recusar um pedido por política de segurança, a API refaz o pedido no modelo de *fallback* recomendado (`fallbacks: "default"`).
-6. A resposta é gravada na conversa e devolvida ao front. Sem `ANTHROPIC_API_KEY`, o chat responde com mensagens simples de *fallback*.
+6. A resposta é gravada na conversa e devolvida ao front. Sem `ANTHROPIC_API_KEY`, o chat entra em **modo sem IA**: classifica a pergunta por palavras-chave (`core/agents/intent_router_crm.py`) e responde às perguntas diretas (vendas e perdas num período, desempenho, funil, agenda, resumo de lead ou oportunidade) com as mesmas ferramentas, em formato fixo (`core/agents/modo_sem_ia.py`).
 
 ### Fluxo da sincronização (`POST /webhooks/rd-station`)
 
@@ -303,7 +303,7 @@ Cada `git push` na `main` gera um novo deploy do serviço correspondente. As mig
 | `POSTGRES_URL` | Sim | `postgresql+asyncpg://crm:crm@localhost:5432/crmassistant` | Conexão com o banco. Aceita também a URL crua dos provedores, como a do Neon (`postgresql://...?sslmode=require&channel_binding=require`) |
 | `JWT_SECRET` | Sim | `change-me` | Chave de assinatura dos tokens. **Troque em produção** |
 | `CORS_ORIGINS` | Não | `*` | Origens permitidas, separadas por vírgula (ex.: `http://localhost:5173`) |
-| `ANTHROPIC_API_KEY` | Não | — | Chave da API do Claude. Sem ela, o chat usa respostas de *fallback* |
+| `ANTHROPIC_API_KEY` | Não | — | Chave da API do Claude. Sem ela, o chat responde em modo sem IA (só perguntas diretas) |
 | `ANTHROPIC_MODEL` | Não | `claude-opus-5` | Modelo usado pelo assistente |
 | `ANTHROPIC_EFFORT` | Não | `low` | Nível de esforço do modelo (`low`, `medium`, `high`...). `low` mantém o chat rápido |
 | `ADMIN_EMAIL` | Sim | — | E-mail do administrador, aplicado a cada inicialização da API |
@@ -344,7 +344,7 @@ Os endpoints marcados com 🔒 exigem o header `Authorization: Bearer <token>`. 
 | PUT/DELETE | `/api/crm/anotacoes/{id}` 🔒 | Altera ou exclui uma anotação (autor ou admin) |
 | GET | `/api/crm/etapas` 🔒 | Funis e etapas do RD Station CRM (ou, sem RD, as etapas já usadas no CRM Assist) |
 | GET | `/api/crm/oportunidades/{id}` 🔒 | Detalhe da oportunidade, com contato, responsável e interações (RF07) |
-| POST | `/api/crm/oportunidades` 🔒 | Cria uma oportunidade e a envia ao RD Station CRM |
+| POST | `/api/crm/oportunidades` 🔒 | Cria uma oportunidade e a envia ao RD Station CRM (409 se o e-mail do contato for de um lead da carteira de outro vendedor) |
 | PUT | `/api/crm/oportunidades/{id}` 🔒 | Atualiza uma oportunidade e envia a alteração ao RD Station CRM |
 | GET | `/oauth/rd/conexao` 🔒 admin | Status, credenciais (sem o secret), URL de callback e webhooks criados |
 | PUT | `/oauth/rd/configuracao` 🔒 admin | Ativa/desativa a integração e define o usuário responsável |
@@ -411,16 +411,20 @@ Não há cadastro manual: ao concluir a autorização, a API cria os webhooks pe
 
 ## Perfis e permissões
 
-O controle de acesso (RF07) é aplicado nos **repositórios**. Assim, qualquer consulta (kanban, métricas ou contexto do chatbot) já chega filtrada.
+As regras do controle de acesso (RF07) ficam em `domain/repositories/crm.py` e são usadas pelos repositórios e pelas rotas. Assim, qualquer consulta (kanban, métricas, telas ou contexto do chatbot) já chega filtrada.
 
 | Perfil | Visibilidade |
 |---|---|
-| `SDR` | Apenas os próprios leads e oportunidades |
-| `CLOSER` | Apenas os próprios leads e oportunidades |
+| `SDR` | As próprias oportunidades; os próprios leads e os contatos das oportunidades que conduz |
+| `CLOSER` | As próprias oportunidades; os próprios leads e os contatos das oportunidades que conduz |
 | `GERENTE` | Todos os dados da equipe |
 | `DIRETOR` | Todos os dados da equipe |
 | `ANALISTA` | Todos os dados da equipe |
 | `ADMIN` | Todos os dados da equipe e gestão de usuários |
+
+O SDR prospecta o lead e, da proposta em diante, o closer assume a negociação: ele vê e anota no contato dela, mas não vê as oportunidades de colegas. No detalhe de um lead, o dono do lead vê todas as oportunidades dele; quem vê o lead só por conduzir um negócio, apenas as próprias (e, das anotações, as gerais do cliente e as dos próprios negócios). Só a gerência transfere um lead para outro vendedor. Ao criar uma oportunidade com o e-mail de um contato da carteira de outro vendedor, a API recusa (409) em vez de reaproveitar ou alterar esse contato.
+
+O token de login leva o tipo `access`, e a API recusa qualquer outro JWT assinado com a mesma chave, como o `state` do OAuth do RD Station.
 
 ---
 
@@ -434,7 +438,8 @@ backend/
 │   ├── core/
 │   │   ├── agents/
 │   │   │   ├── crm_tools.py         # Ferramentas que o Claude usa para consultar o CRM
-│   │   │   └── intent_router_crm.py   # Classificação simples de intenção
+│   │   │   ├── intent_router_crm.py   # Classificação de intenção por palavras-chave
+│   │   │   └── modo_sem_ia.py         # Respostas sem a chave da Anthropic, com as mesmas ferramentas
 │   │   └── rd_station_sync/           # Integração com o RD Station
 │   │       ├── normalize.py           #   extrai e mapeia campos do payload
 │   │       ├── process.py             #   fluxo de processamento do evento

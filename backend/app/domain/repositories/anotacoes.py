@@ -3,12 +3,13 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Interacao, Lead, Oportunidade, Usuario
 from app.dependencies import pode_ver_todos_oportunidades
+from app.domain.repositories.crm import conduz_negocio_do_lead
 
 
 class AnotacaoRepository:
@@ -28,10 +29,17 @@ class AnotacaoRepository:
             )
         )
         if not pode_ver_todos_oportunidades(self.usuario):
-            # Vê as próprias anotações e as dos clientes da própria carteira.
+            # Mesma regra dos leads (ver domain/repositories/crm.py): as próprias anotações, as das
+            # próprias oportunidades, todas as dos próprios leads e, nos leads cujos negócios conduz,
+            # as anotações gerais do cliente (sem oportunidade), não as dos negócios de colegas.
             uid = self.usuario.id
             stmt = stmt.where(
-                or_(Interacao.usuario_id == uid, Lead.usuario_id == uid, Oportunidade.usuario_id == uid)
+                or_(
+                    Interacao.usuario_id == uid,
+                    Oportunidade.usuario_id == uid,
+                    Lead.usuario_id == uid,
+                    and_(Interacao.oportunidade_id.is_(None), conduz_negocio_do_lead(self.usuario)),
+                )
             )
         return stmt
 

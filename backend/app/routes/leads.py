@@ -6,14 +6,15 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.rd_station_sync import envio
 from app.db.database import get_session
 from app.db.models import STATUS_FECHADO, STATUS_GANHO, Lead, Oportunidade, Usuario
 from app.dependencies import get_current_user, pode_ver_todos_oportunidades
+from app.domain.repositories.crm import leads_visiveis, oportunidade_visivel_no_lead
 from app.routes.oportunidades import EnvioRd, Pessoa, _responsavel, enviar_ao_rd
 
 router = APIRouter(prefix="/api/crm/leads", tags=["crm"])
@@ -74,18 +75,18 @@ class LeadResposta(BaseModel):
 async def _carregar(session: AsyncSession, user: Usuario, lead_id: UUID) -> Lead:
     stmt = (
         select(Lead)
-        .where(Lead.id == lead_id)
+        # RF07: os próprios leads e os contatos dos negócios que o usuário conduz.
+        .where(Lead.id == lead_id, leads_visiveis(user))
         .options(selectinload(Lead.usuario), selectinload(Lead.oportunidades))
         .execution_options(populate_existing=True)
     )
     lead = (await session.execute(stmt)).scalar_one_or_none()
-    # RF07: quem não tem visão total só enxerga os próprios leads.
-    if lead is None or (not pode_ver_todos_oportunidades(user) and lead.usuario_id != user.id):
+    if lead is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead não encontrado")
     return lead
 
 
-def _detalhe(lead: Lead) -> LeadDetalhe:
+def _detalhe(lead: Lead, user: Usuario) -> LeadDetalhe:
     return LeadDetalhe(
         id=lead.id,
         nome=lead.nome,
@@ -103,6 +104,7 @@ def _detalhe(lead: Lead) -> LeadDetalhe:
                 status=op.status,
             )
             for op in sorted(lead.oportunidades, key=lambda o: o.updated_at, reverse=True)
+            if oportunidade_visivel_no_lead(user, lead, op)
         ],
         created_at=lead.created_at,
         updated_at=lead.updated_at,
@@ -135,21 +137,25 @@ async def listar(
 ):
     if criado_de and criado_ate and criado_de > criado_ate:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A data inicial é depois da final")
-    qtd = (
-        select(Oportunidade.lead_id, func.count(Oportunidade.id).label("qtd"))
-        .group_by(Oportunidade.lead_id)
-        .subquery()
+    # Oportunidades do lead que o usuário enxerga (RF07): todas para quem vê o time e para o dono do
+    # lead; só as próprias para quem vê o lead por conduzir um negócio dele.
+    op = aliased(Oportunidade)
+    op_visivel = (
+        true() if pode_ver_todos_oportunidades(user) else or_(Lead.usuario_id == user.id, op.usuario_id == user.id)
     )
+
+    def tem_oportunidade(condicao):
+        return select(op.id).where(op.lead_id == Lead.id, op_visivel, condicao).exists()
+
+    qtd = select(func.count(op.id)).where(op.lead_id == Lead.id, op_visivel).scalar_subquery()
     stmt = (
-        select(Lead, func.coalesce(qtd.c.qtd, 0))
-        .outerjoin(qtd, qtd.c.lead_id == Lead.id)
+        select(Lead, qtd)
+        .where(leads_visiveis(user))
         .options(selectinload(Lead.usuario))
         .order_by(Lead.updated_at.desc())
         .limit(LIMITE_LISTA)
     )
-    if not pode_ver_todos_oportunidades(user):
-        stmt = stmt.where(Lead.usuario_id == user.id)
-    elif usuario_id:
+    if usuario_id and pode_ver_todos_oportunidades(user):
         stmt = stmt.where(Lead.usuario_id == usuario_id)
     if busca and busca.strip():
         padrao = f"%{busca.strip()}%"
@@ -159,13 +165,13 @@ async def listar(
     if criado_ate:
         fim = datetime(criado_ate.year, criado_ate.month, criado_ate.day, tzinfo=BRT) + timedelta(days=1)
         stmt = stmt.where(Lead.created_at < fim)
-    status_op = func.lower(func.coalesce(Oportunidade.status, ""))
+    status_op = func.lower(func.coalesce(op.status, ""))
     if oportunidades == "com_aberta":
-        stmt = stmt.where(Lead.oportunidades.any(~status_op.in_(STATUS_FECHADO)))
+        stmt = stmt.where(tem_oportunidade(~status_op.in_(STATUS_FECHADO)))
     elif oportunidades == "com_ganha":
-        stmt = stmt.where(Lead.oportunidades.any(status_op.in_(STATUS_GANHO)))
+        stmt = stmt.where(tem_oportunidade(status_op.in_(STATUS_GANHO)))
     elif oportunidades == "sem":
-        stmt = stmt.where(~Lead.oportunidades.any())
+        stmt = stmt.where(~tem_oportunidade(true()))
     if rd == "sincronizado":
         stmt = stmt.where(Lead.rd_lead_id.is_not(None))
     elif rd == "local":
@@ -193,7 +199,7 @@ async def obter(
     session: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[Usuario, Depends(get_current_user)],
 ):
-    return _detalhe(await _carregar(session, user, lead_id))
+    return _detalhe(await _carregar(session, user, lead_id), user)
 
 
 @router.post(
@@ -214,7 +220,7 @@ async def criar(
     await session.commit()
     lead_id = lead.id  # uma falha no envio faz rollback e expira o objeto
     rd = await enviar_ao_rd(session, envio.enviar_lead, "lead", lead_id)
-    return LeadResposta(lead=_detalhe(await _carregar(session, user, lead_id)), rd=rd)
+    return LeadResposta(lead=_detalhe(await _carregar(session, user, lead_id), user), rd=rd)
 
 
 @router.put(
@@ -229,8 +235,15 @@ async def atualizar(
     user: Annotated[Usuario, Depends(get_current_user)],
 ):
     lead = await _carregar(session, user, lead_id)
-    responsavel_id = await _responsavel(session, user, body.usuario_id or lead.usuario_id)
+    if lead.usuario_id is not None and body.usuario_id in (None, lead.usuario_id):
+        # Sem troca de responsável: o dono continua o mesmo. Assim o closer edita o contato do
+        # próprio negócio sem tirar o lead da carteira do SDR.
+        responsavel_id = lead.usuario_id
+    elif not pode_ver_todos_oportunidades(user) and lead.usuario_id not in (None, user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Só a gerência pode transferir o lead de outro vendedor")
+    else:
+        responsavel_id = await _responsavel(session, user, body.usuario_id)
     _aplicar(lead, body, responsavel_id)
     await session.commit()
     rd = await enviar_ao_rd(session, envio.enviar_lead, "lead", lead_id)
-    return LeadResposta(lead=_detalhe(await _carregar(session, user, lead_id)), rd=rd)
+    return LeadResposta(lead=_detalhe(await _carregar(session, user, lead_id), user), rd=rd)

@@ -17,6 +17,7 @@ from app.core.rd_station_sync.upsert import log_sync
 from app.db.database import get_session
 from app.db.models import Lead, Oportunidade, Usuario
 from app.dependencies import get_current_user, pode_ver_todos_oportunidades
+from app.domain.repositories.crm import leads_visiveis
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
 
@@ -141,22 +142,39 @@ async def _responsavel(session: AsyncSession, user: Usuario, usuario_id: UUID | 
 
 
 async def _salvar_contato(
-    session: AsyncSession, op: Oportunidade, contato: ContatoBody, responsavel_id: UUID
+    session: AsyncSession, user: Usuario, op: Oportunidade, contato: ContatoBody, responsavel_id: UUID
 ) -> None:
-    """Atualiza o contato da oportunidade; sem um, reaproveita o lead de mesmo e-mail ou cria outro."""
+    """Grava o contato da oportunidade.
+
+    Com um contato já ligado, atualiza os dados dele. Sem contato, reaproveita o lead de mesmo
+    e-mail que o usuário pode ver (RF07) ou cria um novo. O lead de outro vendedor nunca é
+    alterado nem devolvido: nesse caso o pedido é recusado (409).
+    """
+    nome = contato.nome.strip()
     email = str(contato.email) if contato.email else None
     telefone = (contato.telefone or "").strip() or None
     lead = await session.get(Lead, op.lead_id) if op.lead_id else None
-    if lead is None and email:
-        lead = (
-            await session.execute(select(Lead).where(func.lower(Lead.email) == email.lower()).limit(1))
-        ).scalar_one_or_none()
-    if lead is None:
-        lead = Lead(usuario_id=responsavel_id)
-        session.add(lead)
-    lead.nome = contato.nome.strip()
-    lead.email = email
-    lead.telefone = telefone
+    if lead is not None:
+        lead.nome, lead.email, lead.telefone = nome, email, telefone
+    else:
+        if email:
+            mesmo_email = func.lower(Lead.email) == email.lower()
+            lead = (
+                await session.execute(select(Lead).where(mesmo_email, leads_visiveis(user)).limit(1))
+            ).scalar_one_or_none()
+            if lead is None and (await session.execute(select(Lead.id).where(mesmo_email).limit(1))).first():
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Este e-mail já é de um contato da carteira de outro vendedor. "
+                    "Peça à gerência para transferir o contato ou use outro e-mail.",
+                )
+        if lead is None:
+            lead = Lead(usuario_id=responsavel_id, nome=nome, email=email, telefone=telefone)
+            session.add(lead)
+        else:
+            # Reaproveita sem apagar o que já existe: só atualiza o que veio preenchido.
+            lead.nome = nome
+            lead.telefone = telefone or lead.telefone
     await session.flush()
     op.lead_id = lead.id
 
@@ -200,8 +218,9 @@ async def enviar_ao_rd(
 
 
 async def _lead_permitido(session: AsyncSession, user: Usuario, lead_id: UUID) -> Lead:
-    lead = await session.get(Lead, lead_id)
-    if lead is None or (not pode_ver_todos_oportunidades(user) and lead.usuario_id != user.id):
+    stmt = select(Lead).where(Lead.id == lead_id, leads_visiveis(user))
+    lead = (await session.execute(stmt)).scalar_one_or_none()
+    if lead is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead não encontrado")
     return lead
 
@@ -265,7 +284,7 @@ async def criar(
     session.add(op)
     await session.flush()
     if body.contato:
-        await _salvar_contato(session, op, body.contato, responsavel_id)
+        await _salvar_contato(session, user, op, body.contato, responsavel_id)
     await session.commit()
     op_id = op.id  # uma falha no envio faz rollback e expira o objeto
     rd = await enviar_ao_rd(session, envio.enviar_oportunidade, "oportunidade", op_id)
@@ -289,7 +308,7 @@ async def atualizar(
     if body.lead_id:
         op.lead_id = (await _lead_permitido(session, user, body.lead_id)).id
     if body.contato:
-        await _salvar_contato(session, op, body.contato, responsavel_id)
+        await _salvar_contato(session, user, op, body.contato, responsavel_id)
     await session.commit()
     rd = await enviar_ao_rd(session, envio.enviar_oportunidade, "oportunidade", op_id)
     return OportunidadeResposta(oportunidade=_detalhe(await _carregar(session, user, op_id)), rd=rd)

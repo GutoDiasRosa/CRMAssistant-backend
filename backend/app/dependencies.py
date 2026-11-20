@@ -3,12 +3,11 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_session
 from app.db.models import Usuario
-from app.security import decode_token_safe
+from app.security import payload_de_acesso
 
 security = HTTPBearer(auto_error=False)
 
@@ -19,8 +18,9 @@ async def get_current_user(
 ) -> Usuario:
     if creds is None or creds.scheme.lower() != "bearer":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token ausente")
-    payload = decode_token_safe(creds.credentials)
-    if not payload or "sub" not in payload:
+    # Só o token de login vale aqui: o `state` do OAuth, assinado com a mesma chave, é recusado.
+    payload = payload_de_acesso(creds.credentials)
+    if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token inválido")
     try:
         uid = uuid.UUID(payload["sub"])

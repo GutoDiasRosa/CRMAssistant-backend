@@ -33,7 +33,7 @@ Abra um terminal na pasta `CRMAssistant-backend/`.
 ANTHROPIC_API_KEY=sua-chave-aqui
 ```
 
-Sem a chave, o sistema funciona normalmente e o assistente responde em "modo sem IA", com um resumo simples.
+Sem a chave, o sistema funciona normalmente e o assistente responde em "modo sem IA": reconhece as perguntas diretas (vendas e perdas num período, desempenho do time, funil, agenda e o resumo de um lead ou de uma oportunidade) e responde com os dados do banco, em formato fixo. Perguntas livres exigem a chave.
 
 Suba os serviços:
 
@@ -129,9 +129,9 @@ A senha do administrador vem do `docker-compose.yml` (`ADMIN_EMAIL` / `ADMIN_PAS
 4. **Assistente**: pergunte, por exemplo, "Quanto vendemos em outubro?", "Quem é o vendedor com melhor desempenho este ano?" ou "Por que perdemos negócios este ano?".
 5. **Agenda**: os retornos de hoje e os atrasados. Registre uma anotação na tela de um lead com retorno para amanhã e veja ela aparecer na agenda do dia seguinte.
 6. **Performance do time**: prospectados, qualificados e fechados por vendedor.
-7. **Controle de acesso**: saia e entre como `sdr@crmassist.dev`. As telas mostram só a carteira dele e, no assistente, "Quais são as oportunidades da Tatiane Rocha?" não traz nada de outra pessoa.
+7. **Controle de acesso**: saia e entre como `sdr@crmassist.dev`. As telas mostram só a carteira dele e, no assistente, "Quais são as oportunidades da Tatiane Rocha?" não traz nada de outra pessoa. Depois entre como `closer@crmassist.dev`: o funil mostra só os negócios dela e a tela **Leads**, os contatos desses negócios, que ela pode abrir e anotar.
 
-Os itens 3 e 4 dependem da chave da Anthropic (passo 2) para respostas completas.
+Sem a chave da Anthropic (passo 2), os itens 3 e 4 respondem em modo sem IA: as perguntas acima funcionam, com respostas em formato fixo. Com a chave, o assistente conversa livremente.
 
 ### Integração com o RD Station (opcional)
 
